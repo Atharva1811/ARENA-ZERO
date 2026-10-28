@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -42,14 +42,23 @@ jobs:
           VITE_GAME_SERVER_URL: ${{ vars.VITE_GAME_SERVER_URL || secrets.VITE_GAME_SERVER_URL }}
         run: npm run build
 
+      - name: Deploy to gh-pages branch
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist
+          branch: gh-pages
+
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v4
+        continue-on-error: true
 
       - name: Upload Build Artifacts
         uses: actions/upload-pages-artifact@v3
+        continue-on-error: true
         with:
           path: './dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
