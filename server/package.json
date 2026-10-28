@@ -1,0 +1,25 @@
+{
+  "name": "arena-zero-server",
+  "version": "1.0.0",
+  "description": "Arena Zero - Server-Authoritative Colyseus Multiplayer Backend",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@colyseus/schema": "^2.0.36",
+    "colyseus": "^0.15.45",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

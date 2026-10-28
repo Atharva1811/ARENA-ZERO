@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: arena-zero-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 2567
+      - key: NODE_ENV
+        value: production
+    healthCheckPath: /health
