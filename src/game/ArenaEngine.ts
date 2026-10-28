@@ -173,16 +173,30 @@ export class ArenaEngine {
 
     // Remote weapon tracer
     this.colyseus.onWeaponTracer = (data) => {
+      if (!data) return;
       if (data.shooterId !== this.colyseus.mySessionId) {
-        this.effectManager.addTracer(
-          data.startX,
-          data.startY,
-          data.startZ,
-          data.endX,
-          data.endY,
-          data.endZ,
-          data.hitTarget
-        );
+        if (
+          Number.isFinite(data.startX) &&
+          Number.isFinite(data.startY) &&
+          Number.isFinite(data.startZ) &&
+          Number.isFinite(data.endX) &&
+          Number.isFinite(data.endY) &&
+          Number.isFinite(data.endZ)
+        ) {
+          try {
+            this.effectManager.addTracer(
+              data.startX,
+              data.startY,
+              data.startZ,
+              data.endX,
+              data.endY,
+              data.endZ,
+              !!data.hitTarget
+            );
+          } catch (e) {
+            console.warn('[ArenaEngine] Failed to add remote tracer:', e);
+          }
+        }
       }
     };
 
@@ -369,18 +383,34 @@ export class ArenaEngine {
       }
     }
 
-    // Spawn local tracer line
-    const weaponMuzzlePos = origin.clone().addScaledVector(direction, 0.4);
-    weaponMuzzlePos.y -= 0.1;
-    this.effectManager.addTracer(
-      weaponMuzzlePos.x,
-      weaponMuzzlePos.y,
-      weaponMuzzlePos.z,
-      hitPoint.x,
-      hitPoint.y,
-      hitPoint.z,
-      !!hitSessionId
-    );
+    // Validate forward ray coordinates
+    if (
+      !Number.isFinite(origin.x) ||
+      !Number.isFinite(origin.y) ||
+      !Number.isFinite(origin.z) ||
+      !Number.isFinite(direction.x) ||
+      !Number.isFinite(direction.y) ||
+      !Number.isFinite(direction.z)
+    ) {
+      return;
+    }
+
+    // Spawn local tracer line safely
+    try {
+      const weaponMuzzlePos = origin.clone().addScaledVector(direction, 0.4);
+      weaponMuzzlePos.y -= 0.1;
+      this.effectManager.addTracer(
+        weaponMuzzlePos.x,
+        weaponMuzzlePos.y,
+        weaponMuzzlePos.z,
+        hitPoint.x,
+        hitPoint.y,
+        hitPoint.z,
+        !!hitSessionId
+      );
+    } catch (e) {
+      console.warn('[ArenaEngine] Failed to add local tracer:', e);
+    }
 
     // Send fire message to server for authoritative validation
     this.colyseus.sendFire({

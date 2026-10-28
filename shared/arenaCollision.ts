@@ -144,50 +144,61 @@ export function isLineOfSightClear(
   x0: number, y0: number, z0: number,
   x1: number, y1: number, z1: number
 ): boolean {
+  if (
+    !Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(z0) ||
+    !Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(z1)
+  ) {
+    return false;
+  }
+
   const dirX = x1 - x0;
   const dirY = y1 - y0;
   const dirZ = z1 - z0;
-  const dist = Math.hypot(dirX, dirZ);
+  const totalDist = Math.hypot(dirX, dirY, dirZ);
 
-  if (dist < 0.001) return true;
+  if (totalDist < 0.001) return true;
 
-  // Normalized direction
-  const nx = dirX / dist;
-  const nz = dirZ / dist;
+  // Normalized 3D direction
+  const nx = dirX / totalDist;
+  const ny = dirY / totalDist;
+  const nz = dirZ / totalDist;
 
   // 1. Raycast against Cylinders in XZ
-  for (const cyl of ARENA_CYLINDERS) {
-    const ox = x0 - cyl.x;
-    const oz = z0 - cyl.z;
-    const b = 2 * (ox * nx + oz * nz);
-    const c = ox * ox + oz * oz - (cyl.radius * cyl.radius);
-    const disc = b * b - 4 * c;
+  const horizDistSq = nx * nx + nz * nz;
+  if (horizDistSq > 0.00001) {
+    for (const cyl of ARENA_CYLINDERS) {
+      const ox = x0 - cyl.x;
+      const oz = z0 - cyl.z;
+      const a = horizDistSq;
+      const b = ox * nx + oz * nz;
+      const c = ox * ox + oz * oz - (cyl.radius * cyl.radius);
+      const disc = b * b - a * c;
 
-    if (disc >= 0) {
-      const sqrtDisc = Math.sqrt(disc);
-      const t1 = (-b - sqrtDisc) / 2;
-      const t2 = (-b + sqrtDisc) / 2;
-      const hitT = t1 > 0 ? t1 : t2;
+      if (disc >= 0) {
+        const sqrtDisc = Math.sqrt(disc);
+        const t1 = (-b - sqrtDisc) / a;
+        const t2 = (-b + sqrtDisc) / a;
 
-      if (hitT > 0.2 && hitT < dist - 0.2) {
-        // Check Y elevation
-        const hitY = y0 + (hitT / dist) * dirY;
-        if (hitY >= cyl.minY && hitY <= cyl.maxY) {
-          return false; // Blocked by cylinder
+        const hitT = t1 > 0.2 ? t1 : (t2 > 0.2 ? t2 : -1);
+        if (hitT > 0.2 && hitT < totalDist - 0.2) {
+          const hitY = y0 + hitT * ny;
+          if (hitY >= cyl.minY && hitY <= cyl.maxY) {
+            return false; // Blocked by cylinder
+          }
         }
       }
     }
   }
 
-  // 2. Raycast against Box colliders (AABB Slab method)
+  // 2. Raycast against Box colliders (3D Slab method)
   for (const box of ARENA_BOXES) {
     let tmin = 0;
-    let tmax = dist;
+    let tmax = totalDist;
 
     // X slab
-    if (Math.abs(dirX) > 0.0001) {
-      let t1 = (box.minX - x0) / (dirX / dist);
-      let t2 = (box.maxX - x0) / (dirX / dist);
+    if (Math.abs(nx) > 0.00001) {
+      let t1 = (box.minX - x0) / nx;
+      let t2 = (box.maxX - x0) / nx;
       if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
       tmin = Math.max(tmin, t1);
       tmax = Math.min(tmax, t2);
@@ -196,10 +207,22 @@ export function isLineOfSightClear(
       continue;
     }
 
+    // Y slab
+    if (Math.abs(ny) > 0.00001) {
+      let t1 = (box.minY - y0) / ny;
+      let t2 = (box.maxY - y0) / ny;
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) continue;
+    } else if (y0 < box.minY || y0 > box.maxY) {
+      continue;
+    }
+
     // Z slab
-    if (Math.abs(dirZ) > 0.0001) {
-      let t1 = (box.minZ - z0) / (dirZ / dist);
-      let t2 = (box.maxZ - z0) / (dirZ / dist);
+    if (Math.abs(nz) > 0.00001) {
+      let t1 = (box.minZ - z0) / nz;
+      let t2 = (box.maxZ - z0) / nz;
       if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
       tmin = Math.max(tmin, t1);
       tmax = Math.min(tmax, t2);
@@ -208,18 +231,8 @@ export function isLineOfSightClear(
       continue;
     }
 
-    // Y slab
-    if (Math.abs(dirY) > 0.0001) {
-      let t1 = (box.minY - y0) / (dirY / dist);
-      let t2 = (box.maxY - y0) / (dirY / dist);
-      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-      tmin = Math.max(tmin, t1);
-      tmax = Math.min(tmax, t2);
-      if (tmin > tmax) continue;
-    }
-
     // If intersection happens between shooter and target
-    if (tmin > 0.2 && tmin < dist - 0.2) {
+    if (tmin < totalDist - 0.2 && tmax > 0.2) {
       return false; // Blocked by wall
     }
   }

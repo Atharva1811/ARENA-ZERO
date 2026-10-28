@@ -34,6 +34,10 @@ export class ArenaRoom extends Room<ArenaState> {
   private matchTimerInterval: NodeJS.Timeout | null = null;
   private nextColorIndex = 0;
 
+  onUncaughtException(error: any, methodName: string) {
+    console.error(`[ArenaRoom Error in ${methodName}] Room: ${this.roomId}:`, error);
+  }
+
   onCreate(options: JoinRoomOptions) {
     this.setState(new ArenaState());
 
@@ -45,21 +49,37 @@ export class ArenaRoom extends Room<ArenaState> {
     // Set simulation update rate (20 Hz = 50ms)
     this.setSimulationInterval((deltaTime) => this.update(deltaTime), 1000 / GAME_CONSTANTS.SERVER_TICK_RATE);
 
-    // Register Network Message Handlers
+    // Register Network Message Handlers with protective boundaries
     this.onMessage('move', (client, data: PlayerInputPayload) => {
-      this.handlePlayerMove(client, data);
+      try {
+        this.handlePlayerMove(client, data);
+      } catch (err: any) {
+        console.error(`[ArenaRoom] Error in handlePlayerMove (client: ${client.sessionId}):`, err);
+      }
     });
 
     this.onMessage('fire', (client, data: FireWeaponPayload) => {
-      this.handlePlayerFire(client, data);
+      try {
+        this.handlePlayerFire(client, data);
+      } catch (err: any) {
+        console.error(`[ArenaRoom] Error in handlePlayerFire (client: ${client.sessionId}):`, err);
+      }
     });
 
     this.onMessage('reload', (client) => {
-      this.handlePlayerReload(client);
+      try {
+        this.handlePlayerReload(client);
+      } catch (err: any) {
+        console.error(`[ArenaRoom] Error in handlePlayerReload (client: ${client.sessionId}):`, err);
+      }
     });
 
     this.onMessage('respawn_request', (client) => {
-      this.handleRespawnRequest(client);
+      try {
+        this.handleRespawnRequest(client);
+      } catch (err: any) {
+        console.error(`[ArenaRoom] Error in handleRespawnRequest (client: ${client.sessionId}):`, err);
+      }
     });
 
     // Match countdown timer (every 1 sec)
@@ -88,7 +108,7 @@ export class ArenaRoom extends Room<ArenaState> {
     player.sessionId = client.sessionId;
 
     // Sanitize and validate nickname
-    let cleanNick = (options.nickname || '').trim().replace(/[^a-zA-Z0-9_\- ]/g, '');
+    let cleanNick = (options?.nickname || '').trim().replace(/[^a-zA-Z0-9_\- ]/g, '');
     if (cleanNick.length < GAME_CONSTANTS.MIN_NICKNAME_LENGTH) {
       cleanNick = `Soldier-${client.sessionId.slice(0, 4).toUpperCase()}`;
     } else if (cleanNick.length > GAME_CONSTANTS.MAX_NICKNAME_LENGTH) {
@@ -113,18 +133,43 @@ export class ArenaRoom extends Room<ArenaState> {
 
     this.state.players.set(client.sessionId, player);
 
-    this.broadcast('server_announcement', {
-      message: `${player.nickname} joined the battle!`,
-    });
+    try {
+      this.broadcast('server_announcement', {
+        message: `${player.nickname} joined the battle!`,
+      });
+    } catch (e) {
+      console.warn('[ArenaRoom] Failed to broadcast server_announcement on join:', e);
+    }
   }
 
-  onLeave(client: Client, _consented?: boolean) {
+  async onLeave(client: Client, consented?: boolean) {
     const player = this.state.players.get(client.sessionId);
-    if (player) {
-      this.broadcast('server_announcement', {
-        message: `${player.nickname} left the match.`,
-      });
+    if (!player) return;
+
+    if (consented) {
+      try {
+        this.broadcast('server_announcement', {
+          message: `${player.nickname} left the match.`,
+        });
+      } catch {}
       this.state.players.delete(client.sessionId);
+    } else {
+      // Unconsented drop — hold seat for 15s to allow reconnection
+      console.log(`[ArenaRoom] Client ${client.sessionId} connection dropped unconsented, awaiting reconnection...`);
+      try {
+        await this.allowReconnection(client, 15);
+        console.log(`[ArenaRoom] Client ${client.sessionId} (${player.nickname}) successfully reconnected.`);
+      } catch {
+        // Reconnection window expired
+        if (this.state.players.has(client.sessionId)) {
+          try {
+            this.broadcast('server_announcement', {
+              message: `${player.nickname} left the match.`,
+            });
+          } catch {}
+          this.state.players.delete(client.sessionId);
+        }
+      }
     }
   }
 
@@ -137,15 +182,23 @@ export class ArenaRoom extends Room<ArenaState> {
   // --- GAME LOGIC & AUTHORITATIVE VALIDATION ---
 
   private handlePlayerMove(client: Client, data: PlayerInputPayload) {
+    if (!data || typeof data !== 'object') return;
+
     const player = this.state.players.get(client.sessionId);
     if (!player || !player.isAlive || this.state.status === 'finished') return;
+
+    // Sanity check coordinates are valid finite numbers
+    if (
+      !Number.isFinite(data.x) ||
+      !Number.isFinite(data.z) ||
+      !Number.isFinite(data.yaw)
+    ) {
+      return;
+    }
 
     const now = Date.now();
     const dt = player.lastMoveTime > 0 ? (now - player.lastMoveTime) / 1000 : 0.05;
     player.lastMoveTime = now;
-
-    // Sanity check coordinates
-    if (isNaN(data.x) || isNaN(data.z) || isNaN(data.yaw)) return;
 
     // Enforce server-side arena obstacle collision
     const resolved = resolveArenaCollision(data.x, data.z, GAME_CONSTANTS.PLAYER_RADIUS);
@@ -164,175 +217,230 @@ export class ArenaRoom extends Room<ArenaState> {
       player.z += Math.sin(angle) * maxAllowedDist;
     }
 
-    player.y = Math.max(0, Math.min(8.0, data.y || 0));
+    player.y = Math.max(0, Math.min(8.0, Number.isFinite(data.y) ? data.y : 0));
     player.yaw = data.yaw;
-    player.pitch = Math.max(-1.5, Math.min(1.5, data.pitch || 0));
-    player.isMoving = data.isMoving;
-    player.isSprinting = data.isSprinting;
+    player.pitch = Math.max(-1.5, Math.min(1.5, Number.isFinite(data.pitch) ? data.pitch : 0));
+    player.isMoving = !!data.isMoving;
+    player.isSprinting = !!data.isSprinting;
   }
 
   private handlePlayerFire(client: Client, data: FireWeaponPayload) {
+    // 1. Verify client existence and player alive state
     const shooter = this.state.players.get(client.sessionId);
-    if (!shooter || !shooter.isAlive || this.state.status !== 'active') return;
-
-    const now = Date.now();
-
-    // 1. Validate fire rate cooldown
-    if (now - shooter.lastShootTime < GAME_CONSTANTS.FIRE_RATE_MS) {
-      return; // Rate limit exceeded
+    if (!shooter || !shooter.isAlive || this.state.status !== 'active') {
+      return;
     }
 
-    // 2. Validate ammunition
-    if (shooter.ammo <= 0 || shooter.isReloadingInternal) {
-      return; // Empty magazine
+    // 2. Validate payload presence and types
+    if (!data || typeof data !== 'object') {
+      console.warn(`[ArenaRoom] Invalid fire payload from client ${client.sessionId}`);
+      return;
     }
 
-    shooter.lastShootTime = now;
-    shooter.ammo--;
-    shooter.isFiring = true;
+    if (
+      !Number.isFinite(data.originX) ||
+      !Number.isFinite(data.originY) ||
+      !Number.isFinite(data.originZ) ||
+      !Number.isFinite(data.dirX) ||
+      !Number.isFinite(data.dirY) ||
+      !Number.isFinite(data.dirZ)
+    ) {
+      console.warn(`[ArenaRoom] Non-finite fire vector from client ${client.sessionId}`);
+      return;
+    }
 
-    // Firing removes spawn protection
-    shooter.isShielded = false;
-
-    // Normalize firing direction
+    // 3. Direction normalization & zero-vector check
     const len = Math.hypot(data.dirX, data.dirY, data.dirZ);
-    if (len < 0.001) return;
+    if (len < 0.001 || !Number.isFinite(len)) {
+      return;
+    }
     const nx = data.dirX / len;
     const ny = data.dirY / len;
     const nz = data.dirZ / len;
 
-    // Broadcast tracer event for visual and audio feedback
+    // 4. Rate-limit validation
+    const now = Date.now();
+    if (now - shooter.lastShootTime < GAME_CONSTANTS.FIRE_RATE_MS) {
+      return; // Rate limit exceeded
+    }
+
+    // 5. Ammunition validation
+    if (shooter.ammo <= 0 || shooter.isReloadingInternal) {
+      return; // Out of ammo or reloading
+    }
+
+    // 6. Origin proximity check (prevent spoofing ray origins far from shooter)
+    const originDistSq = (data.originX - shooter.x) ** 2 + (data.originZ - shooter.z) ** 2;
+    if (originDistSq > 16.0) {
+      console.warn(`[ArenaRoom] Fire origin too far from shooter: ${Math.sqrt(originDistSq).toFixed(2)}m (client: ${client.sessionId})`);
+      return;
+    }
+
+    // All validations passed: perform state changes
+    shooter.lastShootTime = now;
+    shooter.ammo = Math.max(0, shooter.ammo - 1);
+    shooter.isFiring = true;
+    shooter.isShielded = false; // Firing removes spawn protection
+
     const maxRange = GAME_CONSTANTS.MAX_RANGE;
     let hitSomething = false;
     let hitX = data.originX + nx * maxRange;
     let hitY = data.originY + ny * maxRange;
     let hitZ = data.originZ + nz * maxRange;
 
-    // 3. Server-authoritative Hitscan Combat Resolution
+    // 7. Server-authoritative Hitscan Combat Resolution
     let hitTargetSessionId: string | null = null;
     let bestTargetDist: number = maxRange;
     let isHeadshot = false;
 
-    this.state.players.forEach((target, targetSessionId) => {
-      if (targetSessionId === client.sessionId || !target.isAlive) return;
+    try {
+      this.state.players.forEach((target, targetSessionId) => {
+        if (targetSessionId === client.sessionId || !target.isAlive || target.isShielded) {
+          return;
+        }
 
-      // Cannot damage players who have active spawn shield
-      if (target.isShielded) return;
+        if (
+          !Number.isFinite(target.x) ||
+          !Number.isFinite(target.y) ||
+          !Number.isFinite(target.z)
+        ) {
+          return;
+        }
 
-      // Test ray-cylinder intersection against target bounding volume
-      const targetCenterY = target.y + GAME_CONSTANTS.PLAYER_HEIGHT / 2;
-      const targetRadius = GAME_CONSTANTS.PLAYER_RADIUS + 0.22; // Forgiving hitbox
+        const targetCenterY = target.y + GAME_CONSTANTS.PLAYER_HEIGHT / 2;
+        const targetRadius = GAME_CONSTANTS.PLAYER_RADIUS + 0.22; // Forgiving hitbox
 
-      // Vector from ray origin to target center
-      const ox = target.x - data.originX;
-      const oy = targetCenterY - data.originY;
-      const oz = target.z - data.originZ;
+        // Vector from ray origin to target center
+        const ox = target.x - data.originX;
+        const oy = targetCenterY - data.originY;
+        const oz = target.z - data.originZ;
 
-      // Projection along ray direction
-      const t = ox * nx + oy * ny + oz * nz;
-      if (t > 0.4 && t < bestTargetDist) {
-        // Closest point on ray to target center
-        const px = data.originX + nx * t;
-        const py = data.originY + ny * t;
-        const pz = data.originZ + nz * t;
+        // Projection along ray direction
+        const t = ox * nx + oy * ny + oz * nz;
+        if (t > 0.4 && t < bestTargetDist) {
+          const px = data.originX + nx * t;
+          const py = data.originY + ny * t;
+          const pz = data.originZ + nz * t;
 
-        const distSq = (target.x - px) ** 2 + (target.z - pz) ** 2;
-        const verticalDiff = Math.abs(targetCenterY - py);
+          const distSq = (target.x - px) ** 2 + (target.z - pz) ** 2;
+          const verticalDiff = Math.abs(targetCenterY - py);
 
-        if (distSq <= targetRadius * targetRadius && verticalDiff <= GAME_CONSTANTS.PLAYER_HEIGHT / 2) {
-          // Verify that line of sight between shooter and target is not blocked by solid arena walls!
-          const losClear = isLineOfSightClear(
-            data.originX, data.originY, data.originZ,
-            target.x, target.y + GAME_CONSTANTS.EYE_HEIGHT, target.z
-          );
+          if (distSq <= targetRadius * targetRadius && verticalDiff <= GAME_CONSTANTS.PLAYER_HEIGHT / 2) {
+            // Verify line of sight between shooter and target is not blocked by solid arena walls
+            const losClear = isLineOfSightClear(
+              data.originX, data.originY, data.originZ,
+              target.x, target.y + GAME_CONSTANTS.EYE_HEIGHT, target.z
+            );
 
-          if (losClear) {
-            hitTargetSessionId = targetSessionId;
-            bestTargetDist = t;
-            hitSomething = true;
-            hitX = px;
-            hitY = py;
-            hitZ = pz;
-            // Check headshot (top 20% of player height)
-            isHeadshot = py >= target.y + 1.35;
+            if (losClear) {
+              hitTargetSessionId = targetSessionId;
+              bestTargetDist = t;
+              hitSomething = true;
+              hitX = px;
+              hitY = py;
+              hitZ = pz;
+              isHeadshot = py >= target.y + 1.35;
+            }
           }
         }
-      }
-    });
+      });
+    } catch (hitscanErr) {
+      console.error('[ArenaRoom] Hitscan resolution error:', hitscanErr);
+    }
 
-    // Broadcast weapon tracer to all players
-    const tracerEvent: WeaponTracerEvent = {
-      shooterId: client.sessionId,
-      startX: data.originX,
-      startY: data.originY,
-      startZ: data.originZ,
-      endX: hitX,
-      endY: hitY,
-      endZ: hitZ,
-      hitTarget: hitSomething,
-    };
-    this.broadcast('weapon_tracer', tracerEvent);
+    // 8. Broadcast weapon tracer to all players
+    try {
+      const tracerEvent: WeaponTracerEvent = {
+        shooterId: client.sessionId,
+        startX: Number.isFinite(data.originX) ? data.originX : shooter.x,
+        startY: Number.isFinite(data.originY) ? data.originY : shooter.y + GAME_CONSTANTS.EYE_HEIGHT,
+        startZ: Number.isFinite(data.originZ) ? data.originZ : shooter.z,
+        endX: Number.isFinite(hitX) ? hitX : data.originX,
+        endY: Number.isFinite(hitY) ? hitY : data.originY,
+        endZ: Number.isFinite(hitZ) ? hitZ : data.originZ,
+        hitTarget: hitSomething,
+      };
+      this.broadcast('weapon_tracer', tracerEvent);
+    } catch (tracerErr) {
+      console.error('[ArenaRoom] Broadcast weapon tracer error:', tracerErr);
+    }
 
-    // Apply authoritative damage if a player was hit
+    // 9. Apply authoritative damage if a player was hit
     if (hitTargetSessionId) {
-      const bestTarget = this.state.players.get(hitTargetSessionId);
-      if (bestTarget) {
-        const damage = isHeadshot ? GAME_CONSTANTS.HEADSHOT_DAMAGE : GAME_CONSTANTS.WEAPON_DAMAGE;
-        bestTarget.health = Math.max(0, bestTarget.health - damage);
+      try {
+        const bestTarget = this.state.players.get(hitTargetSessionId);
+        if (bestTarget && bestTarget.isAlive) {
+          const damage = isHeadshot ? GAME_CONSTANTS.HEADSHOT_DAMAGE : GAME_CONSTANTS.WEAPON_DAMAGE;
+          bestTarget.health = Math.max(0, bestTarget.health - damage);
 
-        // Send hit confirmation to shooter
-        client.send('hit_confirm', {
-          targetId: bestTarget.sessionId,
-          damage,
-          isKill: bestTarget.health <= 0,
-          headshot: isHeadshot,
-          remainingHealth: bestTarget.health,
-        });
-
-        // Send damage event to victim
-        const victimClient = this.clients.find((c) => c.sessionId === bestTarget.sessionId);
-        if (victimClient) {
-          victimClient.send('damage_received', {
-            attackerId: client.sessionId,
-            damage,
-            currentHealth: bestTarget.health,
-            attackerX: shooter.x,
-            attackerZ: shooter.z,
-          });
-        }
-
-        // Check for elimination
-        if (bestTarget.health <= 0) {
-          bestTarget.isAlive = false;
-          bestTarget.deaths++;
-          bestTarget.respawnTime = now + GAME_CONSTANTS.RESPAWN_TIME_MS;
-
-          shooter.kills++;
-          shooter.score += 100;
-
-          // Update leader
-          if (shooter.score > this.state.leaderScore) {
-            this.state.leaderScore = shooter.score;
-            this.state.leaderId = shooter.sessionId;
+          // Send hit confirmation to shooter
+          try {
+            client.send('hit_confirm', {
+              targetId: bestTarget.sessionId,
+              damage,
+              isKill: bestTarget.health <= 0,
+              headshot: isHeadshot,
+              remainingHealth: bestTarget.health,
+            });
+          } catch (sendErr) {
+            console.warn(`[ArenaRoom] Failed to send hit_confirm to shooter ${client.sessionId}:`, sendErr);
           }
 
-          // Broadcast kill feed item
-          const killItem: KillFeedItem = {
-            id: `${now}-${Math.random()}`,
-            killerId: client.sessionId,
-            killerName: shooter.nickname,
-            victimId: bestTarget.sessionId,
-            victimName: bestTarget.nickname,
-            headshot: isHeadshot,
-            timestamp: now,
-          };
-          this.broadcast('kill_feed', killItem);
+          // Send damage event to victim
+          const victimClient = this.clients.find((c) => c.sessionId === bestTarget.sessionId);
+          if (victimClient) {
+            try {
+              victimClient.send('damage_received', {
+                attackerId: client.sessionId,
+                damage,
+                currentHealth: bestTarget.health,
+                attackerX: shooter.x,
+                attackerZ: shooter.z,
+              });
+            } catch (sendErr) {
+              console.warn(`[ArenaRoom] Failed to send damage_received to victim ${bestTarget.sessionId}:`, sendErr);
+            }
+          }
 
-          // Check if score limit reached
-          if (shooter.kills >= this.state.scoreLimit) {
-            this.endMatch(shooter);
+          // Check for elimination
+          if (bestTarget.health <= 0) {
+            bestTarget.isAlive = false;
+            bestTarget.deaths++;
+            bestTarget.respawnTime = now + GAME_CONSTANTS.RESPAWN_TIME_MS;
+
+            shooter.kills++;
+            shooter.score += 100;
+
+            // Update leader
+            if (shooter.score > this.state.leaderScore) {
+              this.state.leaderScore = shooter.score;
+              this.state.leaderId = shooter.sessionId;
+            }
+
+            // Broadcast kill feed item
+            try {
+              const killItem: KillFeedItem = {
+                id: `${now}-${Math.random()}`,
+                killerId: client.sessionId,
+                killerName: shooter.nickname,
+                victimId: bestTarget.sessionId,
+                victimName: bestTarget.nickname,
+                headshot: isHeadshot,
+                timestamp: now,
+              };
+              this.broadcast('kill_feed', killItem);
+            } catch (broadcastErr) {
+              console.warn('[ArenaRoom] Failed to broadcast kill_feed:', broadcastErr);
+            }
+
+            // Check if score limit reached
+            if (shooter.kills >= this.state.scoreLimit) {
+              this.endMatch(shooter);
+            }
           }
         }
+      } catch (dmgErr) {
+        console.error('[ArenaRoom] Damage application error:', dmgErr);
       }
     }
   }
@@ -370,12 +478,16 @@ export class ArenaRoom extends Room<ArenaState> {
     player.isShielded = true;
     player.shieldExpiryTime = now + GAME_CONSTANTS.SPAWN_PROTECTION_MS;
 
-    client.send('respawn_confirmed', {
-      x: player.x,
-      y: player.y,
-      z: player.z,
-      yaw: player.yaw,
-    });
+    try {
+      client.send('respawn_confirmed', {
+        x: player.x,
+        y: player.y,
+        z: player.z,
+        yaw: player.yaw,
+      });
+    } catch (e) {
+      console.warn(`[ArenaRoom] Failed to send respawn_confirmed to client ${client.sessionId}:`, e);
+    }
   }
 
   private getSafestSpawnPoint(): { x: number; y: number; z: number; yaw: number } {

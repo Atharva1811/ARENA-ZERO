@@ -79,6 +79,14 @@ export const App: React.FC = () => {
       setIsConnecting(false);
     };
 
+    colyseusRef.current.onReconnecting = (attempt, maxAttempts) => {
+      setConnectionError(`Connection interrupted. Reconnecting (${attempt}/${maxAttempts})...`);
+    };
+
+    colyseusRef.current.onReconnected = () => {
+      setConnectionError(null);
+    };
+
     colyseusRef.current.onDisconnect = () => {
       if (appMode === 'PLAYING') {
         handleLeaveMatch();

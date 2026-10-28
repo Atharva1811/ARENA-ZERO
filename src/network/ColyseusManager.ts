@@ -17,6 +17,18 @@ export class ColyseusManager {
   public isConnected: boolean = false;
   private serverUrl: string = '';
 
+  // Reconnection tracking
+  private lastRoomId: string = '';
+  private reconnectionToken: string = '';
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 3;
+  private isReconnecting: boolean = false;
+  private manualLeaveRequested: boolean = false;
+
+  public get reconnecting(): boolean {
+    return this.isReconnecting;
+  }
+
   // Callbacks
   public onStateChange?: (state: any) => void;
   public onPlayerAdd?: (player: any, key: string) => void;
@@ -30,6 +42,8 @@ export class ColyseusManager {
   public onAnnouncement?: (data: { message: string }) => void;
   public onError?: (err: string) => void;
   public onDisconnect?: () => void;
+  public onReconnecting?: (attempt: number, maxAttempts: number) => void;
+  public onReconnected?: () => void;
 
   constructor() {
     this.serverUrl = this.resolveServerUrl();
@@ -76,9 +90,15 @@ export class ColyseusManager {
   private async connect(connectFn: () => Promise<Room>): Promise<Room> {
     try {
       this.leave(); // Leave any previous room
+      this.manualLeaveRequested = false;
+      this.reconnectAttempts = 0;
+      this.isReconnecting = false;
+
       const room = await connectFn();
       this.room = room;
       this.mySessionId = room.sessionId;
+      this.lastRoomId = room.id;
+      this.reconnectionToken = room.reconnectionToken;
       this.isConnected = true;
 
       this.setupRoomListeners(room);
@@ -147,44 +167,109 @@ export class ColyseusManager {
     });
 
     room.onLeave((code) => {
+      console.log(`[ColyseusManager] Disconnected from room with code: ${code}`);
+
+      // If user manually left or intentional server disconnect
+      if (this.manualLeaveRequested || code === 1000 || code === 4000) {
+        this.isConnected = false;
+        this.room = null;
+        this.manualLeaveRequested = false;
+        this.onDisconnect?.();
+        return;
+      }
+
+      // If we have reconnection token and have retries remaining, attempt bounded reconnection
+      if (this.lastRoomId && this.reconnectionToken && this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.isReconnecting = true;
+        this.reconnectAttempts++;
+        const backoffMs = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts - 1), 4000);
+        console.log(`[ColyseusManager] Network dropped (${code}). Reconnecting ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${backoffMs}ms...`);
+        this.onReconnecting?.(this.reconnectAttempts, this.maxReconnectAttempts);
+
+        setTimeout(async () => {
+          if (this.manualLeaveRequested) return;
+          try {
+            const reconnectedRoom = await this.client.reconnect(this.reconnectionToken);
+            this.room = reconnectedRoom;
+            this.mySessionId = reconnectedRoom.sessionId;
+            this.reconnectionToken = reconnectedRoom.reconnectionToken;
+            this.isConnected = true;
+            this.isReconnecting = false;
+            this.reconnectAttempts = 0;
+            this.setupRoomListeners(reconnectedRoom);
+            console.log(`[ColyseusManager] Successfully reconnected to room!`);
+            this.onReconnected?.();
+          } catch (reconnectErr) {
+            console.warn('[ColyseusManager] Reconnection attempt failed:', reconnectErr);
+            if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+              this.isConnected = false;
+              this.room = null;
+              this.isReconnecting = false;
+              this.onDisconnect?.();
+            }
+          }
+        }, backoffMs);
+        return;
+      }
+
       this.isConnected = false;
       this.room = null;
+      this.isReconnecting = false;
       this.onDisconnect?.();
-      console.log(`Disconnected from room with code: ${code}`);
     });
 
     room.onError((code, message) => {
+      console.warn(`[ColyseusManager] Room error [${code}]:`, message);
       this.onError?.(`Server Error [${code}]: ${message}`);
     });
   }
 
-  // --- CLIENT ACTIONS ---
+  // --- CLIENT ACTIONS (WITH SAFE TRY/CATCH) ---
 
   public sendMove(payload: PlayerInputPayload) {
     if (this.room && this.isConnected) {
-      this.room.send('move', payload);
+      try {
+        this.room.send('move', payload);
+      } catch (e) {
+        console.warn('[ColyseusManager] Error sending move:', e);
+      }
     }
   }
 
   public sendFire(payload: FireWeaponPayload) {
     if (this.room && this.isConnected) {
-      this.room.send('fire', payload);
+      try {
+        this.room.send('fire', payload);
+      } catch (e) {
+        console.warn('[ColyseusManager] Error sending fire:', e);
+      }
     }
   }
 
   public sendReload() {
     if (this.room && this.isConnected) {
-      this.room.send('reload');
+      try {
+        this.room.send('reload');
+      } catch (e) {
+        console.warn('[ColyseusManager] Error sending reload:', e);
+      }
     }
   }
 
   public sendRespawnRequest() {
     if (this.room && this.isConnected) {
-      this.room.send('respawn_request');
+      try {
+        this.room.send('respawn_request');
+      } catch (e) {
+        console.warn('[ColyseusManager] Error sending respawn_request:', e);
+      }
     }
   }
 
   public leave() {
+    this.manualLeaveRequested = true;
+    this.reconnectAttempts = this.maxReconnectAttempts;
+    this.isReconnecting = false;
     if (this.room) {
       try {
         this.room.leave();

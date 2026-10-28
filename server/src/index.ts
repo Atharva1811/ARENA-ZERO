@@ -25,6 +25,15 @@ app.get('/health', (_req, res) => {
 
 const server = http.createServer(app);
 
+// Safe process-level error handlers to protect against unexpected termination
+process.on('uncaughtException', (err) => {
+  console.error('[Server UncaughtException]:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Server UnhandledRejection]:', reason);
+});
+
 const gameServer = new Server({
   transport: new WebSocketTransport({
     server,
