@@ -19,16 +19,16 @@ export interface CylinderCollider {
 
 export const ARENA_RADIUS = 28.0;
 
-// Symmetric spawn locations across all quadrants
+// Symmetric spawn locations across all quadrants (all yaws oriented inward toward center (0, 0, 0))
 export const SPAWN_POINTS: Array<{ x: number; y: number; z: number; yaw: number }> = [
-  { x: 0, y: 0, z: 22, yaw: Math.PI },        // South
-  { x: 0, y: 0, z: -22, yaw: 0 },             // North
-  { x: 22, y: 0, z: 0, yaw: -Math.PI / 2 },   // East
-  { x: -22, y: 0, z: 0, yaw: Math.PI / 2 },   // West
-  { x: 15, y: 0, z: 15, yaw: (3 * Math.PI) / 4 }, // South-East
-  { x: -15, y: 0, z: 15, yaw: Math.PI / 4 },      // South-West
-  { x: 15, y: 0, z: -15, yaw: -(3 * Math.PI) / 4 }, // North-East
-  { x: -15, y: 0, z: -15, yaw: -Math.PI / 4 },     // North-West
+  { x: 0, y: 0, z: 22, yaw: 0 },                  // South (faces North toward center: yaw = 0)
+  { x: 0, y: 0, z: -22, yaw: Math.PI },           // North (faces South toward center: yaw = Math.PI)
+  { x: 22, y: 0, z: 0, yaw: Math.PI / 2 },        // East (faces West toward center: yaw = Math.PI / 2)
+  { x: -22, y: 0, z: 0, yaw: -Math.PI / 2 },      // West (faces East toward center: yaw = -Math.PI / 2)
+  { x: 15, y: 0, z: 15, yaw: Math.PI / 4 },       // South-East (faces North-West: yaw = Math.PI / 4)
+  { x: -15, y: 0, z: 15, yaw: -Math.PI / 4 },     // South-West (faces North-East: yaw = -Math.PI / 4)
+  { x: 15, y: 0, z: -15, yaw: (3 * Math.PI) / 4 },// North-East (faces South-West: yaw = 3*Math.PI / 4)
+  { x: -15, y: 0, z: -15, yaw: -(3 * Math.PI) / 4 },// North-West (faces South-East: yaw = -3*Math.PI / 4)
 ];
 
 // Defined solid obstacles in Arena Zero

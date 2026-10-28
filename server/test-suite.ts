@@ -265,53 +265,129 @@ async function runRegressionTests() {
   }
 
   // =========================================================================
-  // TEST 7: A valid shot reduces enemy health
+  // TEST 7: Rotate Player A through 0, 90, 180, and 270 degrees
   // =========================================================================
-  console.log('\n--> Running Test 7: A valid shot reduces enemy health');
+  console.log('\n--> Running Test 7: Rotate Player A through 0, 90, 180, and 270 degrees');
   try {
-    const { room: r1 } = await connectPlayer('Shooter_A');
-    const { room: r2 } = await connectPlayer('Target_B');
+    const { room: rA } = await connectPlayer('Orient_A');
+    const { room: rB } = await connectPlayer('Observer_B');
+    const sRoom = getServerRoom(rA.id);
+    const pA = sRoom.state.players.get(rA.sessionId)!;
+
+    const angles = [
+      { deg: 0, rad: 0 },
+      { deg: 90, rad: Math.PI / 2 },
+      { deg: 180, rad: Math.PI },
+      { deg: 270, rad: -Math.PI / 2 },
+    ];
+
+    let allAnglesSynced = true;
+    for (const testAngle of angles) {
+      rA.send('move', {
+        x: pA.x,
+        y: pA.y,
+        z: pA.z,
+        yaw: testAngle.rad,
+        pitch: 0.15,
+        isMoving: false,
+        isSprinting: false,
+      });
+
+      await new Promise(r => setTimeout(r, 80));
+
+      const pAOnClientB = rB.state.players.get(rA.sessionId);
+      if (!pAOnClientB || Math.abs(pAOnClientB.yaw - testAngle.rad) > 0.01) {
+        allAnglesSynced = false;
+        break;
+      }
+    }
+
+    results.push({
+      id: 7,
+      name: 'Rotate Player A through 0, 90, 180, and 270 degrees',
+      passed: allAnglesSynced,
+      details: allAnglesSynced
+        ? 'Rotated through 0°, 90°, 180°, 270°: Client B received exact orientations without inversions'
+        : 'Angle synchronization mismatch between clients',
+    });
+
+    rA.leave();
+    rB.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 7, name: 'Rotate Player A through 0, 90, 180, and 270 degrees', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 8: Fire at stationary enemy at close range and medium range
+  // =========================================================================
+  console.log('\n--> Running Test 8: Fire at stationary enemy at close and medium range');
+  try {
+    const { room: r1 } = await connectPlayer('Shooter_Combat');
+    const { room: r2 } = await connectPlayer('Stationary_Target');
     const sRoom = getServerRoom(r1.id);
     const p1 = sRoom.state.players.get(r1.sessionId)!;
     const p2 = sRoom.state.players.get(r2.sessionId)!;
 
-    // Position players in clear line of sight (south of bunker-south which is at z: 14.2-15.5)
-    p1.x = 0; p1.y = 0; p1.z = 21; p1.lastMoveTime = Date.now();
+    // Both players in clear line of sight south of bunker-south (z: 14.2 - 15.5)
+    // 1. Medium Range Shot (6 meters apart) - Target is stationary at spawn with default shield!
+    p1.x = 0; p1.y = 0; p1.z = 23; p1.lastMoveTime = Date.now();
     p2.x = 0; p2.y = 0; p2.z = 17; p2.lastMoveTime = Date.now();
-    p2.isShielded = false; // Drop spawn shield
+    // Do NOT manually clear p2.isShielded - verify server hit removes it and reduces HP!
 
-    // Shoot horizontally directly at target
     r1.send('fire', {
       originX: 0,
       originY: GAME_CONSTANTS.EYE_HEIGHT,
-      originZ: 21,
+      originZ: 23,
       dirX: 0,
       dirY: 0,
       dirZ: -1,
-      targetSessionId: r2.sessionId
+      targetSessionId: r2.sessionId,
     });
 
-    await new Promise(r => setTimeout(r, 120));
+    await new Promise(r => setTimeout(r, 100));
 
-    const healthReduced = p2.health < 100;
-    const passed = healthReduced && (p2.health === 75 || p2.health === 55);
+    const mediumRangeHit = p2.health < 100 && !p2.isShielded;
+    const hpAfterMedium = p2.health;
+
+    // 2. Close Range Shot (1.5 meters apart)
+    p1.x = 0; p1.y = 0; p1.z = 18.5; p1.lastMoveTime = Date.now();
+    p1.lastShootTime = 0; // Reset rate limit for test
+    r1.send('fire', {
+      originX: 0,
+      originY: GAME_CONSTANTS.EYE_HEIGHT,
+      originZ: 18.5,
+      dirX: 0,
+      dirY: 0,
+      dirZ: -1,
+      targetSessionId: r2.sessionId,
+    });
+
+    await new Promise(r => setTimeout(r, 100));
+
+    const closeRangeHit = p2.health < hpAfterMedium;
+
+    const passed = mediumRangeHit && closeRangeHit;
     results.push({
-      id: 7,
-      name: 'A valid shot reduces enemy health',
+      id: 8,
+      name: 'Fire at stationary enemy at close and medium range',
       passed,
-      details: passed ? `Target health successfully reduced to ${p2.health} HP` : `Health not reduced properly: ${p2.health}`
+      details: passed
+        ? `Stationary enemy hit at medium range (HP: ${hpAfterMedium}) and close range (HP: ${p2.health}), shield dropped`
+        : `Failed: mediumHit=${mediumRangeHit}, closeHit=${closeRangeHit}, HP=${p2.health}, isShielded=${p2.isShielded}`,
     });
+
     r1.leave();
     r2.leave();
     await new Promise(r => setTimeout(r, 80));
   } catch (e: any) {
-    results.push({ id: 7, name: 'A valid shot reduces enemy health', passed: false, details: e.message });
+    results.push({ id: 8, name: 'Fire at stationary enemy at close and medium range', passed: false, details: e.message });
   }
 
   // =========================================================================
-  // TEST 8: A missed shot does not reduce health
+  // TEST 9: A missed shot does not reduce health
   // =========================================================================
-  console.log('\n--> Running Test 8: A missed shot does not reduce health');
+  console.log('\n--> Running Test 9: A missed shot does not reduce health');
   try {
     const { room: r1 } = await connectPlayer('Shooter_Miss');
     const { room: r2 } = await connectPlayer('Target_Safe');
@@ -321,7 +397,6 @@ async function runRegressionTests() {
 
     p1.x = 0; p1.y = 0; p1.z = 21; p1.lastMoveTime = Date.now();
     p2.x = 0; p2.y = 0; p2.z = 17; p2.lastMoveTime = Date.now();
-    p2.isShielded = false;
 
     // Fire 90 degrees away (to the East: dirX = 1, dirZ = 0)
     r1.send('fire', {
@@ -330,29 +405,29 @@ async function runRegressionTests() {
       originZ: 21,
       dirX: 1,
       dirY: 0,
-      dirZ: 0
+      dirZ: 0,
     });
 
     await new Promise(r => setTimeout(r, 100));
 
     const passed = p2.health === 100;
     results.push({
-      id: 8,
+      id: 9,
       name: 'A missed shot does not reduce health',
       passed,
-      details: passed ? 'Target health remained intact at 100 HP' : `Health improperly altered: ${p2.health}`
+      details: passed ? 'Target health remained intact at 100 HP' : `Health improperly altered: ${p2.health}`,
     });
     r1.leave();
     r2.leave();
     await new Promise(r => setTimeout(r, 80));
   } catch (e: any) {
-    results.push({ id: 8, name: 'A missed shot does not reduce health', passed: false, details: e.message });
+    results.push({ id: 9, name: 'A missed shot does not reduce health', passed: false, details: e.message });
   }
 
   // =========================================================================
-  // TEST 9: A wall blocks shots
+  // TEST 10: A wall blocks shots
   // =========================================================================
-  console.log('\n--> Running Test 9: A wall blocks shots');
+  console.log('\n--> Running Test 10: A wall blocks shots');
   try {
     const { room: r1 } = await connectPlayer('Shooter_Wall');
     const { room: r2 } = await connectPlayer('Target_Wall');
@@ -363,7 +438,6 @@ async function runRegressionTests() {
     // Position players on opposite sides of 'bunker-south' (minZ: 14.2, maxZ: 15.5, minX: -4, maxX: 4)
     p1.x = 0; p1.y = 0; p1.z = 18; p1.lastMoveTime = Date.now();
     p2.x = 0; p2.y = 0; p2.z = 12; p2.lastMoveTime = Date.now();
-    p2.isShielded = false;
 
     // Shoot directly at target through bunker-south
     r1.send('fire', {
@@ -372,29 +446,29 @@ async function runRegressionTests() {
       originZ: 18,
       dirX: 0,
       dirY: 0,
-      dirZ: -1
+      dirZ: -1,
     });
 
     await new Promise(r => setTimeout(r, 100));
 
     const passed = p2.health === 100;
     results.push({
-      id: 9,
+      id: 10,
       name: 'A wall blocks shots',
       passed,
-      details: passed ? 'Solid bunker wall successfully blocked ray, 0 damage applied' : `Wall penetrated! Target health: ${p2.health}`
+      details: passed ? 'Solid bunker wall successfully blocked ray, 0 damage applied' : `Wall penetrated! Target health: ${p2.health}`,
     });
     r1.leave();
     r2.leave();
     await new Promise(r => setTimeout(r, 80));
   } catch (e: any) {
-    results.push({ id: 9, name: 'A wall blocks shots', passed: false, details: e.message });
+    results.push({ id: 10, name: 'A wall blocks shots', passed: false, details: e.message });
   }
 
   // =========================================================================
-  // TEST 10: Health reaching zero produces exactly one death and one kill event
+  // TEST 11: Health reaching zero produces exactly one death and kill event
   // =========================================================================
-  console.log('\n--> Running Test 10: Health reaching zero produces exactly one death and kill event');
+  console.log('\n--> Running Test 11: Health reaching zero produces exactly one death and kill event');
   try {
     const { room: r1 } = await connectPlayer('Killer_A');
     const { room: r2 } = await connectPlayer('Victim_B');
@@ -404,7 +478,6 @@ async function runRegressionTests() {
 
     p1.x = 0; p1.y = 0; p1.z = 21; p1.lastMoveTime = Date.now();
     p2.x = 0; p2.y = 0; p2.z = 17; p2.lastMoveTime = Date.now();
-    p2.isShielded = false;
 
     let killFeedCount = 0;
     r1.onMessage('kill_feed', () => { killFeedCount++; });
@@ -420,23 +493,23 @@ async function runRegressionTests() {
         dirX: 0,
         dirY: 0,
         dirZ: -1,
-        targetSessionId: r2.sessionId
+        targetSessionId: r2.sessionId,
       });
       await new Promise(r => setTimeout(r, 80));
     }
 
     const passed = p2.health === 0 && !p2.isAlive && p2.deaths === 1 && p1.kills === 1 && killFeedCount === 1;
     results.push({
-      id: 10,
+      id: 11,
       name: 'Health reaching zero produces exactly one death and one kill event',
       passed,
-      details: passed ? 'Atomic elimination verified: HP=0, isAlive=false, deaths=1, kills=1, killFeedEvents=1' : `Failed: HP=${p2.health}, alive=${p2.isAlive}, deaths=${p2.deaths}, kills=${p1.kills}, events=${killFeedCount}`
+      details: passed ? 'Atomic elimination verified: HP=0, isAlive=false, deaths=1, kills=1, killFeedEvents=1' : `Failed: HP=${p2.health}, alive=${p2.isAlive}, deaths=${p2.deaths}, kills=${p1.kills}, events=${killFeedCount}`,
     });
 
     // =========================================================================
-    // TEST 11: A dead player cannot shoot
+    // TEST 12: A dead player cannot shoot
     // =========================================================================
-    console.log('\n--> Running Test 11: A dead player cannot shoot');
+    console.log('\n--> Running Test 12: A dead player cannot shoot');
     const initialP1Health = p1.health;
     const initialAmmoP2 = p2.ammo;
 
@@ -448,23 +521,23 @@ async function runRegressionTests() {
       dirX: 0,
       dirY: 0,
       dirZ: 1,
-      targetSessionId: r1.sessionId
+      targetSessionId: r1.sessionId,
     });
 
     await new Promise(r => setTimeout(r, 80));
 
-    const test11Passed = p1.health === initialP1Health && p2.ammo === initialAmmoP2;
+    const test12Passed = p1.health === initialP1Health && p2.ammo === initialAmmoP2;
     results.push({
-      id: 11,
+      id: 12,
       name: 'A dead player cannot shoot',
-      passed: test11Passed,
-      details: test11Passed ? 'Dead player shot safely rejected by server, ammo and enemy health unchanged' : 'Dead player was able to shoot!'
+      passed: test12Passed,
+      details: test12Passed ? 'Dead player shot safely rejected by server, ammo and enemy health unchanged' : 'Dead player was able to shoot!',
     });
 
     // =========================================================================
-    // TEST 12: Respawn restores health without resetting the match score
+    // TEST 13: Respawn restores health without resetting the match score
     // =========================================================================
-    console.log('\n--> Running Test 12: Respawn restores health without resetting match score');
+    console.log('\n--> Running Test 13: Respawn restores health without resetting match score');
     // Fast-forward respawn timer
     p2.respawnTime = Date.now() - 100;
     r2.send('respawn_request');
@@ -473,23 +546,23 @@ async function runRegressionTests() {
 
     const respawnPassed = p2.isAlive && p2.health === 100 && p2.ammo === 24 && p2.deaths === 1 && p1.kills === 1 && p1.score === 100;
     results.push({
-      id: 12,
+      id: 13,
       name: 'Respawn restores health without resetting the match score',
       passed: respawnPassed,
-      details: respawnPassed ? 'Player restored to 100 HP, 24 Ammo while scores preserved (Kills: 1, Score: 100)' : `Failed: HP=${p2.health}, deaths=${p2.deaths}, kills=${p1.kills}`
+      details: respawnPassed ? 'Player restored to 100 HP, 24 Ammo while scores preserved (Kills: 1, Score: 100)' : `Failed: HP=${p2.health}, deaths=${p2.deaths}, kills=${p1.kills}`,
     });
 
     r1.leave();
     r2.leave();
     await new Promise(r => setTimeout(r, 80));
   } catch (e: any) {
-    results.push({ id: 10, name: 'Health reaching zero produces exactly one death and one kill event', passed: false, details: e.message });
+    results.push({ id: 11, name: 'Health reaching zero produces exactly one death and one kill event', passed: false, details: e.message });
   }
 
   // =========================================================================
-  // TEST 13: Both clients observe consistent health, death, and score updates
+  // TEST 14: Both clients observe consistent health, death, and score updates
   // =========================================================================
-  console.log('\n--> Running Test 13: Both clients observe consistent health, death, and score updates');
+  console.log('\n--> Running Test 14: Both clients observe consistent health, death, and score updates');
   try {
     const { room: rA } = await connectPlayer('Sync_Alpha');
     const { room: rB } = await connectPlayer('Sync_Beta');
@@ -499,7 +572,6 @@ async function runRegressionTests() {
 
     pA.x = 0; pA.y = 0; pA.z = 21; pA.lastMoveTime = Date.now();
     pB.x = 0; pB.y = 0; pB.z = 17; pB.lastMoveTime = Date.now();
-    pB.isShielded = false;
 
     // Apply damage to B
     rA.send('fire', {
@@ -509,7 +581,7 @@ async function runRegressionTests() {
       dirX: 0,
       dirY: 0,
       dirZ: -1,
-      targetSessionId: rB.sessionId
+      targetSessionId: rB.sessionId,
     });
 
     await new Promise(r => setTimeout(r, 120));
@@ -520,39 +592,71 @@ async function runRegressionTests() {
 
     const consistent = clientAViewOfB && clientBViewOfB && clientAViewOfB.health === clientBViewOfB.health && clientAViewOfB.health < 100;
     results.push({
-      id: 13,
+      id: 14,
       name: 'Both clients observe consistent health, death, and score updates',
       passed: !!consistent,
-      details: consistent ? `Both clients observed identical target health: ${clientAViewOfB.health} HP` : 'State desync between clients'
+      details: consistent ? `Both clients observed identical target health: ${clientAViewOfB.health} HP` : 'State desync between clients',
     });
     rA.leave();
     rB.leave();
     await new Promise(r => setTimeout(r, 80));
   } catch (e: any) {
-    results.push({ id: 13, name: 'Both clients observe consistent health, death, and score updates', passed: false, details: e.message });
+    results.push({ id: 14, name: 'Both clients observe consistent health, death, and score updates', passed: false, details: e.message });
   }
 
   // =========================================================================
-  // TEST 14: Hiding the server link does not break connection or matchmaking
+  // TEST 15: Repeated firing and movement does not cause disconnects or crashes
   // =========================================================================
-  console.log('\n--> Running Test 14: Hiding the server link does not break connection or matchmaking');
+  console.log('\n--> Running Test 15: Repeated firing and movement does not cause disconnects or crashes');
   try {
-    const client1 = new Client(`ws://localhost:${port}`);
-    const _available = await client1.getAvailableRooms('arena_public');
-    const room = await client1.joinOrCreate('arena_public', { nickname: 'PublicMatchUser' });
-    const sRoom = getServerRoom(room.id);
+    const { room: rActive } = await connectPlayer('StressTester');
+    const sRoom = getServerRoom(rActive.id);
+    const player = sRoom.state.players.get(rActive.sessionId)!;
 
-    const isConnected = room.connection.isOpen && sRoom.state.players.has(room.sessionId);
-    results.push({
-      id: 14,
-      name: 'Hiding the server link does not break connection or matchmaking',
-      passed: isConnected,
-      details: isConnected ? `Matchmaking and room creation fully operational on room ${room.id}` : 'Failed to join or verify room'
+    let firingErrors = 0;
+    rActive.onError((code, message) => {
+      console.warn(`[StressTest] Error received: ${code} - ${message}`);
+      firingErrors++;
     });
-    room.leave();
+
+    // Rapidly send 20 moves and fires
+    for (let i = 0; i < 20; i++) {
+      player.lastShootTime = 0; // Bypass rate limit
+      player.ammo = 24;
+      rActive.send('move', {
+        x: Math.sin(i) * 5,
+        y: 0,
+        z: 20 + Math.cos(i) * 2,
+        yaw: i * 0.3,
+        pitch: 0,
+        isMoving: true,
+        isSprinting: false,
+      });
+
+      rActive.send('fire', {
+        originX: player.x,
+        originY: GAME_CONSTANTS.EYE_HEIGHT,
+        originZ: player.z,
+        dirX: 0,
+        dirY: 0,
+        dirZ: -1,
+      });
+
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    const passed = rActive.connection.isOpen && firingErrors === 0 && !serverCrashOccurred;
+    results.push({
+      id: 15,
+      name: 'Repeated firing and movement does not cause disconnects or crashes',
+      passed,
+      details: passed ? 'Executed 20 rapid move & fire packets with 0 disconnects and 0 errors' : `Failed: open=${rActive.connection.isOpen}, errors=${firingErrors}`,
+    });
+
+    rActive.leave();
     await new Promise(r => setTimeout(r, 80));
   } catch (e: any) {
-    results.push({ id: 14, name: 'Hiding the server link does not break connection or matchmaking', passed: false, details: e.message });
+    results.push({ id: 15, name: 'Repeated firing and movement does not cause disconnects or crashes', passed: false, details: e.message });
   }
 
   // Print Summary

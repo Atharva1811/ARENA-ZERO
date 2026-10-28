@@ -7,6 +7,7 @@ export class RemotePlayer {
   public group: THREE.Group;
 
   // Sub-components for animation
+  private visualRoot: THREE.Group = new THREE.Group();
   private torsoMesh!: THREE.Mesh;
   private headMesh!: THREE.Mesh;
   private visorMesh!: THREE.Mesh;
@@ -25,6 +26,8 @@ export class RemotePlayer {
   // Target states for smooth interpolation
   public targetPos: THREE.Vector3 = new THREE.Vector3();
   public targetYaw: number = 0;
+  public targetPitch: number = 0;
+  public currentPitch: number = 0;
   public isAlive: boolean = true;
   public isShielded: boolean = false;
   public health: number = 100;
@@ -39,6 +42,14 @@ export class RemotePlayer {
     this.nickname = nickname || 'Operator';
     this.color = colorHex || '#3b82f6';
     this.group = new THREE.Group();
+
+    // The character model's native forward axis is +Z (chest plate, visor, and rifle barrel).
+    // In Three.js and Arena Zero world space, yaw = 0 points towards -Z (standard FPS convention).
+    // We apply a model-specific visual rotation offset of Math.PI (180 deg) exactly once to visualRoot.
+    // This perfectly aligns the model's forward axis with the world facing direction.
+    this.visualRoot = new THREE.Group();
+    this.visualRoot.rotation.y = Math.PI;
+    this.group.add(this.visualRoot);
 
     this.group.position.set(initialPos.x, initialPos.y, initialPos.z);
     this.group.rotation.y = initialPos.yaw;
@@ -71,7 +82,7 @@ export class RemotePlayer {
     this.torsoMesh.position.y = 1.05;
     this.torsoMesh.castShadow = true;
     this.torsoMesh.receiveShadow = true;
-    this.group.add(this.torsoMesh);
+    this.visualRoot.add(this.torsoMesh);
 
     // Chest armor plate with player color
     const chestPlateGeo = new THREE.BoxGeometry(0.48, 0.4, 0.08);
@@ -84,7 +95,7 @@ export class RemotePlayer {
     this.headMesh = new THREE.Mesh(headGeo, armorDarkMat);
     this.headMesh.position.y = 1.55;
     this.headMesh.castShadow = true;
-    this.group.add(this.headMesh);
+    this.visualRoot.add(this.headMesh);
 
     // Visor
     const visorGeo = new THREE.BoxGeometry(0.3, 0.1, 0.08);
@@ -99,7 +110,7 @@ export class RemotePlayer {
     const leftArmMesh = new THREE.Mesh(armGeo, armorDarkMat);
     leftArmMesh.position.y = -0.28;
     this.leftArmPivot.add(leftArmMesh);
-    this.group.add(this.leftArmPivot);
+    this.visualRoot.add(this.leftArmPivot);
 
     // 4. Right Arm Pivot (holding rifle)
     this.rightArmPivot = new THREE.Group();
@@ -134,7 +145,7 @@ export class RemotePlayer {
 
     rifleGroup.position.set(0, -0.45, 0.2);
     this.rightArmPivot.add(rifleGroup);
-    this.group.add(this.rightArmPivot);
+    this.visualRoot.add(this.rightArmPivot);
 
     // 5. Left Leg Pivot (hip at y = 0.75, x = -0.16)
     this.leftLegPivot = new THREE.Group();
@@ -144,7 +155,7 @@ export class RemotePlayer {
     leftLegMesh.position.y = -0.375;
     leftLegMesh.castShadow = true;
     this.leftLegPivot.add(leftLegMesh);
-    this.group.add(this.leftLegPivot);
+    this.visualRoot.add(this.leftLegPivot);
 
     // 6. Right Leg Pivot (hip at y = 0.75, x = 0.16)
     this.rightLegPivot = new THREE.Group();
@@ -153,7 +164,7 @@ export class RemotePlayer {
     rightLegMesh.position.y = -0.375;
     rightLegMesh.castShadow = true;
     this.rightLegPivot.add(rightLegMesh);
-    this.group.add(this.rightLegPivot);
+    this.visualRoot.add(this.rightLegPivot);
 
     // 7. Spawn Shield Bubble
     const shieldGeo = new THREE.SphereGeometry(1.25, 16, 12);
@@ -168,7 +179,7 @@ export class RemotePlayer {
     this.shieldMesh = new THREE.Mesh(shieldGeo, shieldMat);
     this.shieldMesh.position.y = 1.1;
     this.shieldMesh.visible = false;
-    this.group.add(this.shieldMesh);
+    this.visualRoot.add(this.shieldMesh);
   }
 
   private buildBillboard() {
@@ -243,6 +254,13 @@ export class RemotePlayer {
     if (typeof state.y === 'number') this.targetPos.y = state.y;
     if (typeof state.z === 'number') this.targetPos.z = state.z;
     if (typeof state.yaw === 'number') this.targetYaw = state.yaw;
+    if (typeof state.pitch === 'number') this.targetPitch = state.pitch;
+
+    // Detect large distance jumps (teleport, respawn) and snap immediately to prevent sliding
+    if (this.group.position.distanceToSquared(this.targetPos) > 64) {
+      this.group.position.copy(this.targetPos);
+      this.group.rotation.y = this.targetYaw;
+    }
 
     if (typeof state.isMoving === 'boolean') this.isMoving = state.isMoving;
     if (typeof state.isShielded === 'boolean') this.isShielded = state.isShielded;
@@ -282,24 +300,28 @@ export class RemotePlayer {
     }
     this.group.visible = true;
 
-    // 4. Walk cycle animation when moving
+    // 4. Smooth aim pitch tracking (tilt head and weapon arm)
+    this.currentPitch = THREE.MathUtils.lerp(this.currentPitch, this.targetPitch, Math.min(1, dt * 15));
+    this.headMesh.rotation.x = -this.currentPitch * 0.75;
+
+    // 5. Walk cycle animation when moving
     if (this.isMoving) {
       this.walkCycleTime += dt * 10;
       const swing = Math.sin(this.walkCycleTime) * 0.45;
       this.leftLegPivot.rotation.x = swing;
       this.rightLegPivot.rotation.x = -swing;
       this.leftArmPivot.rotation.x = -swing * 0.7;
-      // Right arm holds rifle steady, subtle sway
-      this.rightArmPivot.rotation.x = -Math.PI / 4 + Math.cos(this.walkCycleTime) * 0.05;
+      // Right arm holds rifle steady with pitch offset
+      this.rightArmPivot.rotation.x = -Math.PI / 4 - this.currentPitch * 0.45 + Math.cos(this.walkCycleTime) * 0.05;
     } else {
       // Idle pose
       this.leftLegPivot.rotation.x = THREE.MathUtils.lerp(this.leftLegPivot.rotation.x, 0, dt * 10);
       this.rightLegPivot.rotation.x = THREE.MathUtils.lerp(this.rightLegPivot.rotation.x, 0, dt * 10);
       this.leftArmPivot.rotation.x = THREE.MathUtils.lerp(this.leftArmPivot.rotation.x, 0, dt * 10);
-      this.rightArmPivot.rotation.x = THREE.MathUtils.lerp(this.rightArmPivot.rotation.x, -Math.PI / 4, dt * 10);
+      this.rightArmPivot.rotation.x = THREE.MathUtils.lerp(this.rightArmPivot.rotation.x, -Math.PI / 4 - this.currentPitch * 0.45, dt * 10);
     }
 
-    // 5. Shield bubble animation
+    // 6. Shield bubble animation
     if (this.isShielded) {
       this.shieldMesh.visible = true;
       this.shieldPulseTime += dt * 4;

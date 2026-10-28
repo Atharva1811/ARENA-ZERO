@@ -66,8 +66,8 @@ function intersectRayCylinder(
       const t2 = (centerY + height - originY) / ny;
       const tMin = Math.min(t1, t2);
       const tMax = Math.max(t1, t2);
-      if (tMax >= 0.3) {
-        const tHit = Math.max(0.3, tMin);
+      if (tMax >= 0.1) {
+        const tHit = Math.max(0.1, tMin);
         const py = originY + ny * tHit;
         return {
           hit: true,
@@ -94,11 +94,11 @@ function intersectRayCylinder(
   const t1 = (-b - sqrtDisc) / (2 * a);
   const t2 = (-b + sqrtDisc) / (2 * a);
 
-  if (t2 < 0.3) {
+  if (t2 < 0.1) {
     return { hit: false, dist: Infinity, hitX: 0, hitY: 0, hitZ: 0, isHeadshot: false };
   }
 
-  const tStart = Math.max(0.3, t1);
+  const tStart = Math.max(0.1, t1);
   const tEnd = t2;
 
   const yStart = originY + ny * tStart;
@@ -116,10 +116,10 @@ function intersectRayCylinder(
   let tHit = tStart;
   if (yStart > cylinderTop && ny < 0) {
     const tCap = (cylinderTop - originY) / ny;
-    if (tCap >= 0.3 && tCap <= tEnd) tHit = tCap;
+    if (tCap >= 0.1 && tCap <= tEnd) tHit = tCap;
   } else if (yStart < cylinderBottom && ny > 0) {
     const tCap = (cylinderBottom - originY) / ny;
-    if (tCap >= 0.3 && tCap <= tEnd) tHit = tCap;
+    if (tCap >= 0.1 && tCap <= tEnd) tHit = tCap;
   }
 
   const px = originX + nx * tHit;
@@ -453,6 +453,10 @@ export class ArenaRoom extends Room<ArenaState> {
     shooter.isFiring = true;
     shooter.isShielded = false; // Firing removes spawn protection
 
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[Combat Diagnostic] FIRE: Shooter ${shooter.nickname} (${client.sessionId}) origin=(${data.originX.toFixed(2)}, ${data.originY.toFixed(2)}, ${data.originZ.toFixed(2)}) dir=(${nx.toFixed(2)}, ${ny.toFixed(2)}, ${nz.toFixed(2)}) ammo=${shooter.ammo}`);
+    }
+
     const maxRange = GAME_CONSTANTS.MAX_RANGE;
     let hitSomething = false;
     let hitX = data.originX + nx * maxRange;
@@ -466,7 +470,7 @@ export class ArenaRoom extends Room<ArenaState> {
 
     try {
       this.state.players.forEach((target, targetSessionId) => {
-        if (targetSessionId === client.sessionId || !target.isAlive || target.isShielded) {
+        if (targetSessionId === client.sessionId || !target.isAlive) {
           return;
         }
 
@@ -498,7 +502,11 @@ export class ArenaRoom extends Room<ArenaState> {
           GAME_CONSTANTS.PLAYER_HEIGHT
         );
 
-        if (hitResult.hit && hitResult.dist > 0.3 && hitResult.dist < bestTargetDist) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`[Combat Diagnostic] Candidate target ${target.nickname} (${targetSessionId}) pos=(${target.x.toFixed(2)}, ${target.z.toFixed(2)}) | hit=${hitResult.hit} dist=${hitResult.hit ? hitResult.dist.toFixed(2) + 'm' : 'N/A'}`);
+        }
+
+        if (hitResult.hit && hitResult.dist >= 0.1 && hitResult.dist < bestTargetDist) {
           // Verify line of sight directly to the exact impact point on the player's bounding cylinder
           const losClear = isLineOfSightClear(
             data.originX,
@@ -548,6 +556,7 @@ export class ArenaRoom extends Room<ArenaState> {
       try {
         const bestTarget = this.state.players.get(hitTargetSessionId);
         if (bestTarget && bestTarget.isAlive) {
+          bestTarget.isShielded = false; // Valid confirmed hit breaks spawn shield
           const healthBefore = bestTarget.health;
           const damage = isHeadshot ? GAME_CONSTANTS.HEADSHOT_DAMAGE : GAME_CONSTANTS.WEAPON_DAMAGE;
           bestTarget.health = Math.max(0, bestTarget.health - damage);
@@ -630,6 +639,8 @@ export class ArenaRoom extends Room<ArenaState> {
       } catch (dmgErr) {
         console.error('[ArenaRoom] Damage application error:', dmgErr);
       }
+    } else if (process.env.NODE_ENV !== 'production') {
+      console.log(`[Combat Diagnostic] MISS: Shot from ${shooter.nickname} (${client.sessionId}) did not hit any target.`);
     }
   }
 
