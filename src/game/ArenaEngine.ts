@@ -150,17 +150,30 @@ export class ArenaEngine {
   private setupNetworkHandlers() {
     // State sync
     this.colyseus.onStateChange = (state) => {
+      if (this.isDisposed) return;
       this.handleServerStateChange(state);
+    };
+
+    // Immediate player removal notification
+    this.colyseus.onPlayerRemove = (_player, sessionId) => {
+      if (this.isDisposed) return;
+      const remote = this.remotePlayers.get(sessionId);
+      if (remote) {
+        remote.dispose();
+        this.remotePlayers.delete(sessionId);
+      }
     };
 
     // Hit confirmation from server
     this.colyseus.onHitConfirm = (data) => {
+      if (this.isDisposed) return;
       this.fpsAudio.playHitMarker(data.headshot);
       this.callbacks.onCrosshairHit?.(data.headshot);
     };
 
     // Damage received from server
     this.colyseus.onDamageReceived = (data) => {
+      if (this.isDisposed) return;
       this.health = Math.max(0, data.currentHealth);
       this.fpsAudio.playDamageGrunt();
       this.callbacks.onHealthChange?.(this.health, this.maxHealth);
@@ -169,12 +182,16 @@ export class ArenaEngine {
 
     // Kill feed broadcast
     this.colyseus.onKillFeed = (item) => {
+      if (this.isDisposed) return;
       this.callbacks.onKillFeed?.(item);
+      if (item.victimId === this.colyseus.mySessionId && item.killerName) {
+        this.callbacks.onPlayerDeath?.(item.killerName);
+      }
     };
 
     // Remote weapon tracer
     this.colyseus.onWeaponTracer = (data) => {
-      if (!data) return;
+      if (!data || this.isDisposed) return;
       if (data.shooterId !== this.colyseus.mySessionId) {
         if (
           Number.isFinite(data.startX) &&
@@ -203,12 +220,14 @@ export class ArenaEngine {
 
     // Initial spawn location confirmation from server
     this.colyseus.onInitSpawn = (data) => {
+      if (this.isDisposed) return;
       this.fpsController.teleport(data.x, data.y, data.z, data.yaw);
       this.hasInitialServerSpawn = true;
     };
 
     // Respawn confirmation
     this.colyseus.onRespawnConfirmed = (data) => {
+      if (this.isDisposed) return;
       this.isAlive = true;
       this.health = this.maxHealth;
       this.ammo = this.maxAmmo;
@@ -224,12 +243,22 @@ export class ArenaEngine {
 
     // Match over
     this.colyseus.onMatchOver = (winner) => {
+      if (this.isDisposed) return;
       this.callbacks.onMatchOver?.(winner);
     };
   }
 
   private handleServerStateChange(state: any) {
-    if (!state) return;
+    if (!state || this.isDisposed) return;
+
+    // Ensure self session never has a ghost RemotePlayer entity
+    if (this.colyseus.mySessionId && this.remotePlayers.has(this.colyseus.mySessionId)) {
+      const selfGhost = this.remotePlayers.get(this.colyseus.mySessionId);
+      if (selfGhost) {
+        selfGhost.dispose();
+        this.remotePlayers.delete(this.colyseus.mySessionId);
+      }
+    }
 
     if (typeof state.matchTimeRemaining === 'number') {
       this.callbacks.onMatchTimeUpdate?.(state.matchTimeRemaining);
@@ -501,6 +530,21 @@ export class ArenaEngine {
 
   public dispose() {
     this.isDisposed = true;
+
+    // Detach all network handlers so stale room messages cannot recreate players or invoke callbacks
+    if (this.colyseus) {
+      this.colyseus.onStateChange = undefined;
+      this.colyseus.onPlayerAdd = undefined;
+      this.colyseus.onPlayerRemove = undefined;
+      this.colyseus.onHitConfirm = undefined;
+      this.colyseus.onDamageReceived = undefined;
+      this.colyseus.onKillFeed = undefined;
+      this.colyseus.onWeaponTracer = undefined;
+      this.colyseus.onInitSpawn = undefined;
+      this.colyseus.onRespawnConfirmed = undefined;
+      this.colyseus.onMatchOver = undefined;
+      this.colyseus.onAnnouncement = undefined;
+    }
 
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);

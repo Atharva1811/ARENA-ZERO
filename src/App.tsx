@@ -71,6 +71,7 @@ export const App: React.FC = () => {
     setIsDead(false);
     setMatchWinner(null);
     setIsScoreboardOpen(false);
+    setPlayers([]);
   }, []);
 
   // Setup connection error & matchmaking callbacks

@@ -27,6 +27,9 @@ export class PlayerState extends Schema {
   @type('boolean') isAlive: boolean = true;
 
   // Server internal tracking (not synced over network)
+  clientToken: string = '';
+  spawnX: number = 0;
+  spawnZ: number = 0;
   lastShootTime: number = 0;
   lastMoveTime: number = 0;
   shieldExpiryTime: number = 0;

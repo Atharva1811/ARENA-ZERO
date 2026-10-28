@@ -73,13 +73,18 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           <p className="arena-tagline">STYLIZED MULTIPLAYER FIRST-PERSON SHOOTER</p>
         </div>
 
-        {/* Server Connection Banner */}
+        {/* Server Connection Status Banner */}
         <div className="arena-server-badge">
-          <span className="server-dot pulse" />
-          <span className="server-label">MULTIPLAYER NETWORK:</span>
-          <span className="server-url-tag" title={serverUrl}>
-            {serverUrl.replace(/^wss?:\/\//, '')}
+          <span className={`server-dot ${isConnecting ? 'connecting' : connectionError ? 'error' : 'pulse'}`} />
+          <span className="server-label">NETWORK STATUS:</span>
+          <span className="server-status-tag">
+            {isConnecting ? 'CONNECTING...' : connectionError ? 'OFFLINE' : 'ONLINE / READY'}
           </span>
+          {import.meta.env.DEV && (
+            <span className="server-dev-tag" title={`Dev Endpoint: ${serverUrl || 'Default'}`}>
+              [DEV]
+            </span>
+          )}
         </div>
 
         {/* Connection Error Message */}

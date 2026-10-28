@@ -224,9 +224,22 @@ export class ArenaRoom extends Room<ArenaState> {
   }
 
   onJoin(client: Client, options: JoinRoomOptions) {
+    // If a clientToken was passed and an existing player has the same token, prune stale session immediately
+    if (options?.clientToken) {
+      this.state.players.forEach((existingPlayer, sid) => {
+        if (existingPlayer.clientToken === options.clientToken && sid !== client.sessionId) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.log(`[ArenaRoom] Pruning stale ghost session ${sid} for clientToken ${options.clientToken}`);
+          }
+          this.state.players.delete(sid);
+        }
+      });
+    }
+
     const player = new PlayerState();
     player.id = client.id;
     player.sessionId = client.sessionId;
+    player.clientToken = options?.clientToken || '';
 
     // Sanitize and validate nickname
     let cleanNick = (options?.nickname || '').trim().replace(/[^a-zA-Z0-9_\- ]/g, '');
@@ -247,6 +260,8 @@ export class ArenaRoom extends Room<ArenaState> {
     player.y = spawn.y;
     player.z = spawn.z;
     player.yaw = spawn.yaw;
+    player.spawnX = spawn.x;
+    player.spawnZ = spawn.z;
 
     // Grant temporary spawn protection shield
     player.isShielded = true;
@@ -255,6 +270,10 @@ export class ArenaRoom extends Room<ArenaState> {
 
     this.state.players.set(client.sessionId, player);
     this.updateRoomMetadata();
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[Combat Diagnostic] Player joined: ${player.nickname} (${client.sessionId}) at (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)})`);
+    }
 
     // Authoritative spawn notification to newly joined client
     try {
@@ -283,34 +302,19 @@ export class ArenaRoom extends Room<ArenaState> {
     const player = this.state.players.get(client.sessionId);
     if (!player) return;
 
-    if (consented) {
-      try {
-        this.broadcast('server_announcement', {
-          message: `${player.nickname} left the match.`,
-        });
-      } catch {}
-      this.state.players.delete(client.sessionId);
-      this.updateRoomMetadata();
-    } else {
-      // Unconsented drop — hold seat for 15s to allow reconnection
-      console.log(`[ArenaRoom] Client ${client.sessionId} connection dropped unconsented, awaiting reconnection...`);
-      try {
-        await this.allowReconnection(client, 15);
-        console.log(`[ArenaRoom] Client ${client.sessionId} (${player.nickname}) successfully reconnected.`);
-        this.updateRoomMetadata();
-      } catch {
-        // Reconnection window expired
-        if (this.state.players.has(client.sessionId)) {
-          try {
-            this.broadcast('server_announcement', {
-              message: `${player.nickname} left the match.`,
-            });
-          } catch {}
-          this.state.players.delete(client.sessionId);
-          this.updateRoomMetadata();
-        }
-      }
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[Combat Diagnostic] Player left (${consented ? 'consented' : 'unconsented'}): ${player.nickname} (${client.sessionId})`);
     }
+
+    try {
+      this.broadcast('server_announcement', {
+        message: `${player.nickname} left the match.`,
+      });
+    } catch {}
+
+    // Immediately remove from authoritative room state to guarantee no ghost models
+    this.state.players.delete(client.sessionId);
+    this.updateRoomMetadata();
   }
 
   onDispose() {
@@ -358,9 +362,15 @@ export class ArenaRoom extends Room<ArenaState> {
       player.z += Math.sin(angle) * maxAllowedDist;
     }
 
-    // Significant movement drops spawn protection
-    if (player.isShielded && movedDist > 0.8) {
-      player.isShielded = false;
+    // Moving away from spawn point (> 1.2m) or timer expiry drops spawn protection shield
+    if (player.isShielded) {
+      const distFromSpawn = Math.hypot(player.x - player.spawnX, player.z - player.spawnZ);
+      if (distFromSpawn > 1.2 || now >= player.shieldExpiryTime) {
+        player.isShielded = false;
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`[Combat Diagnostic] Spawn protection dropped for ${player.nickname} (${client.sessionId}) [moved: ${distFromSpawn.toFixed(2)}m]`);
+        }
+      }
     }
 
     player.y = Math.max(0, Math.min(8.0, Number.isFinite(data.y) ? data.y : 0));
@@ -374,12 +384,17 @@ export class ArenaRoom extends Room<ArenaState> {
     // 1. Verify client existence and player alive state
     const shooter = this.state.players.get(client.sessionId);
     if (!shooter || !shooter.isAlive || this.state.status !== 'active') {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[Combat Diagnostic] Shot rejected from client ${client.sessionId}: ${!shooter ? 'Shooter not found' : !shooter.isAlive ? 'Shooter is dead' : 'Match not active'}`);
+      }
       return;
     }
 
     // 2. Validate payload presence and types
     if (!data || typeof data !== 'object') {
-      console.warn(`[ArenaRoom] Invalid fire payload from client ${client.sessionId}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`[Combat Diagnostic] Invalid fire payload from client ${client.sessionId}`);
+      }
       return;
     }
 
@@ -391,13 +406,18 @@ export class ArenaRoom extends Room<ArenaState> {
       !Number.isFinite(data.dirY) ||
       !Number.isFinite(data.dirZ)
     ) {
-      console.warn(`[ArenaRoom] Non-finite fire vector from client ${client.sessionId}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`[Combat Diagnostic] Non-finite fire vector from client ${client.sessionId}`);
+      }
       return;
     }
 
     // 3. Direction normalization & zero-vector check
     const len = Math.hypot(data.dirX, data.dirY, data.dirZ);
     if (len < 0.001 || !Number.isFinite(len)) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`[Combat Diagnostic] Zero-length fire direction from client ${client.sessionId}`);
+      }
       return;
     }
     const nx = data.dirX / len;
@@ -412,13 +432,18 @@ export class ArenaRoom extends Room<ArenaState> {
 
     // 5. Ammunition validation
     if (shooter.ammo <= 0 || shooter.isReloadingInternal) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[Combat Diagnostic] Shot rejected from ${shooter.nickname} (${client.sessionId}): Out of ammo (${shooter.ammo}) or reloading`);
+      }
       return; // Out of ammo or reloading
     }
 
     // 6. Origin proximity check (prevent spoofing ray origins far from shooter)
     const originDistSq = (data.originX - shooter.x) ** 2 + (data.originZ - shooter.z) ** 2;
     if (originDistSq > 16.0) {
-      console.warn(`[ArenaRoom] Fire origin too far from shooter: ${Math.sqrt(originDistSq).toFixed(2)}m (client: ${client.sessionId})`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`[Combat Diagnostic] Fire origin too far from shooter: ${Math.sqrt(originDistSq).toFixed(2)}m (client: ${client.sessionId})`);
+      }
       return;
     }
 
@@ -453,7 +478,11 @@ export class ArenaRoom extends Room<ArenaState> {
           return;
         }
 
-        const targetRadius = GAME_CONSTANTS.PLAYER_RADIUS + 0.25; // Forgiving hitbox
+        // Add appropriate tolerance for network latency when player aimed at client target
+        const isClientClaimedTarget = data.targetSessionId === targetSessionId;
+        const targetRadius = isClientClaimedTarget
+          ? (GAME_CONSTANTS.PLAYER_RADIUS + 0.35)
+          : (GAME_CONSTANTS.PLAYER_RADIUS + 0.25);
 
         const hitResult = intersectRayCylinder(
           data.originX,
@@ -488,6 +517,8 @@ export class ArenaRoom extends Room<ArenaState> {
             hitY = hitResult.hitY;
             hitZ = hitResult.hitZ;
             isHeadshot = hitResult.isHeadshot;
+          } else if (process.env.NODE_ENV !== 'production') {
+            console.log(`[Combat Diagnostic] Hit blocked by arena wall: shooter ${client.sessionId} -> target ${targetSessionId}`);
           }
         }
       });
@@ -517,8 +548,14 @@ export class ArenaRoom extends Room<ArenaState> {
       try {
         const bestTarget = this.state.players.get(hitTargetSessionId);
         if (bestTarget && bestTarget.isAlive) {
+          const healthBefore = bestTarget.health;
           const damage = isHeadshot ? GAME_CONSTANTS.HEADSHOT_DAMAGE : GAME_CONSTANTS.WEAPON_DAMAGE;
           bestTarget.health = Math.max(0, bestTarget.health - damage);
+          const healthAfter = bestTarget.health;
+
+          if (process.env.NODE_ENV !== 'production') {
+            console.log(`[Combat Diagnostic] HIT: ${shooter.nickname} (${client.sessionId}) -> ${bestTarget.nickname} (${bestTarget.sessionId}) | DMG: ${damage} (${isHeadshot ? 'HEADSHOT' : 'BODY'}) | HP: ${healthBefore} -> ${healthAfter}`);
+          }
 
           // Send hit confirmation to shooter
           try {
@@ -557,6 +594,10 @@ export class ArenaRoom extends Room<ArenaState> {
 
             shooter.kills++;
             shooter.score += 100;
+
+            if (process.env.NODE_ENV !== 'production') {
+              console.log(`[Combat Diagnostic] ELIMINATION: ${shooter.nickname} eliminated ${bestTarget.nickname}! [Kills: ${shooter.kills}, Score: ${shooter.score}]`);
+            }
 
             // Update leader
             if (shooter.score > this.state.leaderScore) {
@@ -615,15 +656,22 @@ export class ArenaRoom extends Room<ArenaState> {
     player.y = spawn.y;
     player.z = spawn.z;
     player.yaw = spawn.yaw;
+    player.spawnX = spawn.x;
+    player.spawnZ = spawn.z;
+    player.lastMoveTime = 0; // Initialize so respawn movement is accepted smoothly
     player.health = GAME_CONSTANTS.MAX_HEALTH;
     player.ammo = GAME_CONSTANTS.MAGAZINE_SIZE;
     player.isAlive = true;
     player.isReloading = false;
     player.isReloadingInternal = false;
 
-    // Grant spawn protection shield
+    // Grant temporary spawn protection shield
     player.isShielded = true;
     player.shieldExpiryTime = now + GAME_CONSTANTS.SPAWN_PROTECTION_MS;
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[Combat Diagnostic] Player ${player.nickname} (${client.sessionId}) respawned at (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}) with 100 HP`);
+    }
 
     try {
       client.send('respawn_confirmed', {

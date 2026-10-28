@@ -180,6 +180,17 @@ body, html, #root {
   animation: pulseDot 2s ease-in-out infinite;
 }
 
+.server-dot.connecting {
+  background-color: var(--accent-amber);
+  box-shadow: 0 0 8px var(--accent-amber);
+  animation: pulseDot 1s ease-in-out infinite;
+}
+
+.server-dot.error {
+  background-color: var(--accent-rose);
+  box-shadow: 0 0 8px var(--accent-rose);
+}
+
 @keyframes pulseDot {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.85); }
@@ -188,6 +199,23 @@ body, html, #root {
 .server-label {
   color: var(--text-dim);
   font-weight: 600;
+}
+
+.server-status-tag {
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.server-dev-tag {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  cursor: help;
 }
 
 .server-url-tag {

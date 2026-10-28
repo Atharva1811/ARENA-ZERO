@@ -18,6 +18,8 @@ export class ColyseusManager {
   public mySessionId: string = '';
   public isConnected: boolean = false;
   private serverUrl: string = '';
+  private clientToken: string = '';
+  private currentRoomEpoch: number = 0;
 
   // Reconnection tracking
   private lastRoomId: string = '';
@@ -50,8 +52,22 @@ export class ColyseusManager {
   public onMatchmakingStatus?: (status: 'searching' | 'found' | 'connecting') => void;
 
   constructor() {
+    this.clientToken = this.getOrCreateClientToken();
     this.serverUrl = this.resolveServerUrl();
     this.client = new Client(this.serverUrl);
+  }
+
+  private getOrCreateClientToken(): string {
+    try {
+      let token = sessionStorage.getItem('arena_zero_client_token');
+      if (!token) {
+        token = 'az-' + Math.random().toString(36).substring(2, 12) + '-' + Date.now().toString(36);
+        sessionStorage.setItem('arena_zero_client_token', token);
+      }
+      return token;
+    } catch {
+      return 'az-' + Math.random().toString(36).substring(2, 12);
+    }
   }
 
   public getServerUrl(): string {
@@ -77,7 +93,7 @@ export class ColyseusManager {
   }
 
   public async joinPublic(nickname: string): Promise<Room> {
-    const options: JoinRoomOptions = { nickname };
+    const options: JoinRoomOptions = { nickname, clientToken: this.clientToken };
 
     return this.connect(async () => {
       this.onMatchmakingStatus?.('searching');
@@ -113,18 +129,22 @@ export class ColyseusManager {
   }
 
   public async createPrivate(nickname: string): Promise<Room> {
-    const options: JoinRoomOptions = { nickname, isPrivate: true };
+    const options: JoinRoomOptions = { nickname, isPrivate: true, clientToken: this.clientToken };
     return this.connect(() => this.client.create('arena_private', options));
   }
 
   public async joinPrivate(nickname: string, roomCode: string): Promise<Room> {
-    const options: JoinRoomOptions = { nickname, roomCode: roomCode.trim().toUpperCase() };
+    const options: JoinRoomOptions = {
+      nickname,
+      roomCode: roomCode.trim().toUpperCase(),
+      clientToken: this.clientToken,
+    };
     return this.connect(() => this.client.joinOrCreate('arena_private', options));
   }
 
   private async connect(connectFn: () => Promise<Room>): Promise<Room> {
     try {
-      this.leave(); // Leave any previous room
+      this.leave(); // Leave any previous room and clean state
       this.manualLeaveRequested = false;
       this.reconnectAttempts = 0;
       this.isReconnecting = false;
@@ -147,18 +167,24 @@ export class ColyseusManager {
   }
 
   private setupRoomListeners(room: Room) {
+    const myEpoch = this.currentRoomEpoch;
+
     // Sync state
     room.onStateChange((state) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onStateChange?.(state);
     });
 
     // Players collection change events
     const attachPlayerListeners = (state: any) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       if (state && state.players) {
         state.players.onAdd((player: any, key: string) => {
+          if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
           this.onPlayerAdd?.(player, key);
         });
         state.players.onRemove((player: any, key: string) => {
+          if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
           this.onPlayerRemove?.(player, key);
         });
       }
@@ -174,38 +200,47 @@ export class ColyseusManager {
 
     // Custom Server Broadcast Messages
     room.onMessage('hit_confirm', (data: HitConfirmPayload) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onHitConfirm?.(data);
     });
 
     room.onMessage('damage_received', (data: DamageReceivedPayload) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onDamageReceived?.(data);
     });
 
     room.onMessage('kill_feed', (data: KillFeedItem) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onKillFeed?.(data);
     });
 
     room.onMessage('weapon_tracer', (data: WeaponTracerEvent) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onWeaponTracer?.(data);
     });
 
     room.onMessage('init_spawn', (data: SpawnConfirmedPayload) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onInitSpawn?.(data);
     });
 
     room.onMessage('respawn_confirmed', (data: { x: number; y: number; z: number; yaw: number }) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onRespawnConfirmed?.(data);
     });
 
     room.onMessage('match_over', (data: MatchWinnerPayload) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onMatchOver?.(data);
     });
 
     room.onMessage('server_announcement', (data: { message: string }) => {
+      if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
       this.onAnnouncement?.(data);
     });
 
     room.onLeave((code) => {
+      if (this.currentRoomEpoch !== myEpoch) return;
       console.log(`[ColyseusManager] Disconnected from room with code: ${code}`);
 
       // If user manually left or intentional server disconnect
@@ -226,7 +261,7 @@ export class ColyseusManager {
         this.onReconnecting?.(this.reconnectAttempts, this.maxReconnectAttempts);
 
         setTimeout(async () => {
-          if (this.manualLeaveRequested) return;
+          if (this.manualLeaveRequested || this.currentRoomEpoch !== myEpoch) return;
           try {
             const reconnectedRoom = await this.client.reconnect(this.reconnectionToken);
             this.room = reconnectedRoom;
@@ -258,6 +293,7 @@ export class ColyseusManager {
     });
 
     room.onError((code, message) => {
+      if (this.currentRoomEpoch !== myEpoch) return;
       console.warn(`[ColyseusManager] Room error [${code}]:`, message);
       this.onError?.(`Server Error [${code}]: ${message}`);
     });
@@ -306,15 +342,22 @@ export class ColyseusManager {
   }
 
   public leave() {
+    this.currentRoomEpoch++;
     this.manualLeaveRequested = true;
     this.reconnectAttempts = this.maxReconnectAttempts;
     this.isReconnecting = false;
     if (this.room) {
       try {
-        this.room.leave();
-      } catch {}
+        this.room.removeAllListeners();
+        this.room.leave(true);
+      } catch (e) {
+        console.warn('[ColyseusManager] Error leaving room:', e);
+      }
       this.room = null;
     }
+    this.mySessionId = '';
+    this.lastRoomId = '';
+    this.reconnectionToken = '';
     this.isConnected = false;
   }
 }

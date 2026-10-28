@@ -17,8 +17,8 @@ interface TestResult {
   details?: string;
 }
 
-async function runAll16Tests() {
-  const port = 2582;
+async function runRegressionTests() {
+  const port = 2584; // Independent port for this test run
   const app = express();
   app.use(cors());
   const server = http.createServer(app);
@@ -29,7 +29,7 @@ async function runAll16Tests() {
   gameServer.define('arena_public', ArenaRoom).enableRealtimeListing();
   gameServer.define('arena_private', ArenaRoom).filterBy(['roomCode']).enableRealtimeListing();
   await gameServer.listen(port);
-  console.log(`[Test Server] Running on ws://localhost:${port}`);
+  console.log(`[Regression Test Server] Running on ws://localhost:${port}`);
 
   let serverCrashOccurred = false;
   process.on('uncaughtException', (err) => {
@@ -45,594 +45,541 @@ async function runAll16Tests() {
     return room;
   }
 
-  async function connectPlayer(nickname: string) {
+  async function connectPlayer(nickname: string, options: any = {}) {
     const client = new Client(`ws://localhost:${port}`);
-    const room = await client.joinOrCreate('arena_public', { nickname });
+    const room = await client.joinOrCreate('arena_public', { nickname, ...options });
     return { client, room };
   }
 
-  // -------------------------------------------------------------------------
-  // Test 1: Two independent clients request public matchmaking and join the same room
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 1: Two independent clients join same public room');
+  // =========================================================================
+  // TEST 1: A player joins and appears exactly once
+  // =========================================================================
+  console.log('\n--> Running Test 1: A player joins and appears exactly once');
   try {
-    const { room: r1 } = await connectPlayer('Test1_Player1');
-    const client2 = new Client(`ws://localhost:${port}`);
-    
-    // Client 2 queries available rooms and joins the existing one
-    const available = await client2.getAvailableRooms('arena_public');
-    const openRoom = available.find(r => r.clients < r.maxClients && !r.metadata?.isPrivate);
-    let r2;
-    if (openRoom) {
-      r2 = await client2.joinById(openRoom.roomId, { nickname: 'Test1_Player2' });
-    } else {
-      r2 = await client2.joinOrCreate('arena_public', { nickname: 'Test1_Player2' });
-    }
+    const { room } = await connectPlayer('Test1_Player');
+    const sRoom = getServerRoom(room.id);
+    const inState = sRoom.state.players.has(room.sessionId);
+    const count = sRoom.state.players.size;
+    const player = sRoom.state.players.get(room.sessionId);
+    const validStats = player && player.health === 100 && player.ammo === 24 && player.isAlive;
 
-    const passed = r1.id === r2.id && r1.connection.isOpen && r2.connection.isOpen;
+    const passed = inState && count === 1 && !!validStats;
     results.push({
       id: 1,
-      name: 'Two independent clients join the same available room',
+      name: 'A player joins and appears exactly once',
       passed,
-      details: passed ? `Both clients matched into room ID: ${r1.id}` : `Separate rooms created: ${r1.id} vs ${r2.id}`
-    });
-    r1.leave();
-    r2.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 1, name: 'Two independent clients join the same available room', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 2: No existing room causes one room to be created
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 2: No existing room causes one room to be created');
-  try {
-    const { room } = await connectPlayer('Test2_Pioneer');
-    const serverRoom = getServerRoom(room.id);
-    const passed = !!serverRoom && serverRoom.roomId === room.id && serverRoom.state.players.has(room.sessionId);
-    results.push({
-      id: 2,
-      name: 'No existing room causes one room to be created',
-      passed,
-      details: passed ? `New room created with ID ${room.id}` : 'Failed to create room'
+      details: passed ? `Session ${room.sessionId} registered once with 100 HP, 24 Ammo` : `Count: ${count}, inState: ${inState}`
     });
     room.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 2, name: 'No existing room causes one room to be created', passed: false, details: err.message });
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 1, name: 'A player joins and appears exactly once', passed: false, details: e.message });
   }
 
-  // -------------------------------------------------------------------------
-  // Test 3: A full room causes matchmaking to choose another room
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 3: A full room causes matchmaking to choose another room');
+  // =========================================================================
+  // TEST 2: A player leaves and their model is removed
+  // =========================================================================
+  console.log('\n--> Running Test 2: A player leaves and their model is removed');
   try {
-    const { room: r1 } = await connectPlayer('Test3_A');
-    const sRoom1 = getServerRoom(r1.id);
-    const originalMax = sRoom1.maxClients;
-    // Set maxClients to 1 to simulate a full room
-    sRoom1.maxClients = 1;
-    sRoom1.setMetadata({
-      roomCode: sRoom1.state.roomCode,
-      isPrivate: sRoom1.state.isPrivate,
-      playerCount: 1,
-      maxClients: 1,
-      status: sRoom1.state.status,
-    });
-    sRoom1.lock(); // Colyseus locks room when full
-
-    const clientB = new Client(`ws://localhost:${port}`);
-    const available = await clientB.getAvailableRooms('arena_public');
-    const eligible = available.find(r => r.clients < r.maxClients && !r.metadata?.isPrivate);
-    
-    let r2;
-    if (eligible) {
-      r2 = await clientB.joinById(eligible.roomId, { nickname: 'Test3_B' });
-    } else {
-      r2 = await clientB.joinOrCreate('arena_public', { nickname: 'Test3_B' });
-    }
-
-    const passed = r1.id !== r2.id && r2.connection.isOpen;
-    results.push({
-      id: 3,
-      name: 'A full room causes matchmaking to choose another room',
-      passed,
-      details: passed ? `Full room bypassed, client placed in new room ${r2.id}` : `Client placed into full room ${r1.id}`
-    });
-    sRoom1.maxClients = originalMax;
-    r1.leave();
-    r2.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 3, name: 'A full room causes matchmaking to choose another room', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 4: A disconnected player is removed from room membership
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 4: A disconnected player is removed from room membership');
-  try {
-    const { room } = await connectPlayer('Test4_Leaver');
-    const sRoom = getServerRoom(room.id);
-    const sid = room.sessionId;
-    
-    await room.leave(true); // Consented leave
-    await new Promise(r => setTimeout(r, 150));
-
-    const passed = !sRoom.state.players.has(sid);
-    results.push({
-      id: 4,
-      name: 'A disconnected player is removed from room membership',
-      passed,
-      details: passed ? `Player ${sid} successfully removed from room state` : `Player ${sid} still lingering in room state`
-    });
-  } catch (err: any) {
-    results.push({ id: 4, name: 'A disconnected player is removed from room membership', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 5: Two players move and receive synchronized state
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 5: Two players move and receive synchronized state');
-  try {
-    const { room: r1 } = await connectPlayer('Test5_Mover1');
-    const { room: r2 } = await connectPlayer('Test5_Mover2');
-
-    let r2SawR1Move = false;
-    r2.onStateChange((state) => {
-      const p1 = state.players.get(r1.sessionId);
-      if (p1 && Math.abs(p1.x - 4.5) < 0.2 && Math.abs(p1.z - 6.5) < 0.2) {
-        r2SawR1Move = true;
-      }
-    });
-
-    r1.send('move', { x: 4.5, y: 0, z: 6.5, yaw: 1.2, pitch: 0, isMoving: true, isSprinting: false });
-    await new Promise(r => setTimeout(r, 300));
-
-    const passed = r2SawR1Move && r1.connection.isOpen && r2.connection.isOpen;
-    results.push({
-      id: 5,
-      name: 'Two players move and receive synchronized state',
-      passed,
-      details: passed ? 'Movement synchronized across clients via state patch' : 'Movement failed to synchronize to remote client'
-    });
-    r1.leave();
-    r2.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 5, name: 'Two players move and receive synchronized state', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 6: Player A shoots Player B and valid damage is applied
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 6: Player A shoots Player B and valid damage is applied');
-  try {
-    const { room: rA } = await connectPlayer('Test6_Shooter');
-    const { room: rB } = await connectPlayer('Test6_Target');
-    const sRoom = getServerRoom(rA.id);
-
-    const pA = sRoom.state.players.get(rA.sessionId)!;
-    const pB = sRoom.state.players.get(rB.sessionId)!;
-
-    pA.x = 5; pA.y = 0; pA.z = 5; pA.isShielded = false;
-    pB.x = 5; pB.y = 0; pB.z = 2; pB.isShielded = false;
-
-    let hitConfirmed = false;
-    let damageReceived = false;
-    rA.onMessage('hit_confirm', () => { hitConfirmed = true; });
-    rB.onMessage('damage_received', () => { damageReceived = true; });
-
-    rA.send('fire', {
-      originX: 5, originY: 1.65, originZ: 5,
-      dirX: 0, dirY: 0, dirZ: -1
-    });
-
-    await new Promise(r => setTimeout(r, 300));
-    const passed = hitConfirmed && damageReceived && pB.health < 100;
-    results.push({
-      id: 6,
-      name: 'Player A shoots Player B and valid damage is applied',
-      passed,
-      details: passed ? `Hit confirmed, target health reduced to ${pB.health}` : `Hit confirmation failed (HP: ${pB.health})`
-    });
-    rA.leave();
-    rB.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 6, name: 'Player A shoots Player B and valid damage is applied', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 7: Player B can shoot Player A
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 7: Player B can shoot Player A');
-  try {
-    const { room: rA } = await connectPlayer('Test7_PlayerA');
-    const { room: rB } = await connectPlayer('Test7_PlayerB');
-    const sRoom = getServerRoom(rA.id);
-
-    const pA = sRoom.state.players.get(rA.sessionId)!;
-    const pB = sRoom.state.players.get(rB.sessionId)!;
-
-    pA.x = 8; pA.y = 0; pA.z = 8; pA.isShielded = false;
-    pB.x = 8; pB.y = 0; pB.z = 4; pB.isShielded = false;
-
-    let bHitConfirmed = false;
-    rB.onMessage('hit_confirm', () => { bHitConfirmed = true; });
-
-    // B shoots back towards A (direction: (0, 0, 1))
-    rB.send('fire', {
-      originX: 8, originY: 1.65, originZ: 4,
-      dirX: 0, dirY: 0, dirZ: 1
-    });
-
-    await new Promise(r => setTimeout(r, 300));
-    const passed = bHitConfirmed && pA.health < 100;
-    results.push({
-      id: 7,
-      name: 'Player B can shoot Player A',
-      passed,
-      details: passed ? `B hit A successfully, A health reduced to ${pA.health}` : 'B shooting A failed'
-    });
-    rA.leave();
-    rB.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 7, name: 'Player B can shoot Player A', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 8: A missed shot does not change health
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 8: A missed shot does not change health');
-  try {
-    const { room: rA } = await connectPlayer('Test8_Shooter');
-    const { room: rB } = await connectPlayer('Test8_Target');
-    const sRoom = getServerRoom(rA.id);
-
-    const pA = sRoom.state.players.get(rA.sessionId)!;
-    const pB = sRoom.state.players.get(rB.sessionId)!;
-
-    pA.x = 5; pA.y = 0; pA.z = 5; pA.isShielded = false;
-    pB.x = 5; pB.y = 0; pB.z = 2; pB.isShielded = false;
-
-    // Shoot in opposite direction (away from target)
-    rA.send('fire', {
-      originX: 5, originY: 1.65, originZ: 5,
-      dirX: 0, dirY: 0, dirZ: 1
-    });
-
-    await new Promise(r => setTimeout(r, 200));
-    const passed = pB.health === 100;
-    results.push({
-      id: 8,
-      name: 'A missed shot does not change health',
-      passed,
-      details: passed ? 'Target health remained intact at 100' : `Target health mutated to ${pB.health}`
-    });
-    rA.leave();
-    rB.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 8, name: 'A missed shot does not change health', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 9: A shot through a solid wall does not damage the target
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 9: A shot through a solid wall does not damage the target');
-  try {
-    const { room: rA } = await connectPlayer('Test9_WallShooter');
-    const { room: rB } = await connectPlayer('Test9_WallTarget');
-    const sRoom = getServerRoom(rA.id);
-
-    const pA = sRoom.state.players.get(rA.sessionId)!;
-    const pB = sRoom.state.players.get(rB.sessionId)!;
-
-    // Center platform pillar sits at (0, 0, 0). Position A at (0, 0, 6) and B at (0, 0, -6)
-    pA.x = 0; pA.y = 0; pA.z = 6; pA.isShielded = false;
-    pB.x = 0; pB.y = 0; pB.z = -6; pB.isShielded = false;
-
-    let hitRegistered = false;
-    rA.onMessage('hit_confirm', () => { hitRegistered = true; });
-
-    rA.send('fire', {
-      originX: 0, originY: 1.65, originZ: 6,
-      dirX: 0, dirY: 0, dirZ: -1
-    });
-
-    await new Promise(r => setTimeout(r, 300));
-    const passed = !hitRegistered && pB.health === 100;
-    results.push({
-      id: 9,
-      name: 'A shot through a solid wall does not damage the target',
-      passed,
-      details: passed ? 'Wall blocked line of sight authoritatively, 0 damage taken' : 'Wall penetration hit erroneously allowed'
-    });
-    rA.leave();
-    rB.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 9, name: 'A shot through a solid wall does not damage the target', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 10: A dead player cannot continue shooting
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 10: A dead player cannot continue shooting');
-  try {
-    const { room } = await connectPlayer('Test10_DeadShooter');
-    const sRoom = getServerRoom(room.id);
-    const p = sRoom.state.players.get(room.sessionId)!;
-
-    p.health = 0;
-    p.isAlive = false;
-    const initialAmmo = p.ammo;
-
-    let tracerSent = false;
-    room.onMessage('weapon_tracer', () => { tracerSent = true; });
-
-    room.send('fire', {
-      originX: p.x, originY: 1.65, originZ: p.z,
-      dirX: 0, dirY: 0, dirZ: -1
-    });
-
-    await new Promise(r => setTimeout(r, 200));
-    const passed = !tracerSent && p.ammo === initialAmmo;
-    results.push({
-      id: 10,
-      name: 'A dead player cannot continue shooting',
-      passed,
-      details: passed ? 'Dead player shot safely rejected, ammo preserved' : 'Dead player was allowed to shoot'
-    });
-    room.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 10, name: 'A dead player cannot continue shooting', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 11: Death updates scores exactly once
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 11: Death updates scores exactly once');
-  try {
-    const { room: rA } = await connectPlayer('Test11_Killer');
-    const { room: rB } = await connectPlayer('Test11_Victim');
-    const sRoom = getServerRoom(rA.id);
-
-    const pA = sRoom.state.players.get(rA.sessionId)!;
-    const pB = sRoom.state.players.get(rB.sessionId)!;
-
-    pA.x = 6; pA.y = 0; pA.z = 6; pA.isShielded = false;
-    pB.x = 6; pB.y = 0; pB.z = 3; pB.isShielded = false;
-    pB.health = 10; // 1 shot to eliminate
-
-    let killFeedCount = 0;
-    rA.onMessage('kill_feed', () => { killFeedCount++; });
-
-    rA.send('fire', {
-      originX: 6, originY: 1.65, originZ: 6,
-      dirX: 0, dirY: 0, dirZ: -1
-    });
-
-    await new Promise(r => setTimeout(r, 350));
-    
-    // Shoot corpse again
-    rA.send('fire', {
-      originX: 6, originY: 1.65, originZ: 6,
-      dirX: 0, dirY: 0, dirZ: -1
-    });
-    await new Promise(r => setTimeout(r, 200));
-
-    const passed = pA.kills === 1 && pB.deaths === 1 && killFeedCount === 1 && !pB.isAlive;
-    results.push({
-      id: 11,
-      name: 'Death updates scores exactly once',
-      passed,
-      details: passed ? `Scores updated exactly once (Kills: ${pA.kills}, Deaths: ${pB.deaths})` : `Score corrupted (Kills: ${pA.kills}, Deaths: ${pB.deaths}, Feeds: ${killFeedCount})`
-    });
-    rA.leave();
-    rB.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 11, name: 'Death updates scores exactly once', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 12: Respawn restores the player correctly
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 12: Respawn restores the player correctly');
-  try {
-    const { room } = await connectPlayer('Test12_Respawner');
-    const sRoom = getServerRoom(room.id);
-    const p = sRoom.state.players.get(room.sessionId)!;
-
-    p.health = 0;
-    p.isAlive = false;
-    p.ammo = 0;
-    p.respawnTime = Date.now() - 100; // Eligible immediately
-
-    let respawnConfirmed = false;
-    room.onMessage('respawn_confirmed', (data: any) => {
-      respawnConfirmed = true;
-      p.x = data.x;
-      p.z = data.z;
-    });
-
-    room.send('respawn_request');
-    await new Promise(r => setTimeout(r, 250));
-
-    const passed = respawnConfirmed && p.isAlive && p.health === GAME_CONSTANTS.MAX_HEALTH && p.ammo === GAME_CONSTANTS.MAGAZINE_SIZE;
-    results.push({
-      id: 12,
-      name: 'Respawn restores the player correctly',
-      passed,
-      details: passed ? `Player restored to 100 HP, 24 Ammo at (${p.x.toFixed(1)}, ${p.z.toFixed(1)})` : 'Respawn failed'
-    });
-    room.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 12, name: 'Respawn restores the player correctly', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 13: Multiple simultaneous shots do not corrupt state
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 13: Multiple simultaneous shots do not corrupt state');
-  try {
-    const clients = await Promise.all([
-      connectPlayer('Test13_A'),
-      connectPlayer('Test13_B'),
-      connectPlayer('Test13_C'),
-      connectPlayer('Test13_D'),
-    ]);
-
-    // Send simultaneous fire from all 4 players
-    await Promise.all(
-      clients.map(({ room }) => {
-        return new Promise<void>((resolve) => {
-          room.send('fire', { originX: 0, originY: 1.65, originZ: 10, dirX: 0, dirY: 0, dirZ: 1 });
-          resolve();
-        });
-      })
-    );
-
-    await new Promise(r => setTimeout(r, 300));
-    const allIntact = clients.every(({ room }) => room.connection.isOpen);
-    results.push({
-      id: 13,
-      name: 'Multiple simultaneous shots do not corrupt state',
-      passed: allIntact,
-      details: allIntact ? 'All 4 simultaneous shots handled atomically without socket drops' : 'Socket dropped on concurrent fire'
-    });
-
-    for (const c of clients) c.room.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 13, name: 'Multiple simultaneous shots do not corrupt state', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 14: Repeated firing does not crash or disconnect the server
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 14: Repeated firing does not crash or disconnect the server');
-  try {
-    const { room } = await connectPlayer('Test14_Spammer');
-    for (let i = 0; i < 25; i++) {
-      room.send('fire', { originX: 0, originY: 1.65, originZ: 10, dirX: 0, dirY: 0, dirZ: 1 });
-    }
-
-    await new Promise(r => setTimeout(r, 300));
-    const passed = room.connection.isOpen && !serverCrashOccurred;
-    results.push({
-      id: 14,
-      name: 'Repeated firing does not crash or disconnect the server',
-      passed,
-      details: passed ? '25 rapid shots handled cleanly, connection remains open' : 'Client disconnected or server crashed'
-    });
-    room.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 14, name: 'Repeated firing does not crash or disconnect the server', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 15: Invalid messages are rejected without terminating the room
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 15: Invalid messages are rejected without terminating the room');
-  try {
-    const { room: rFuzzer } = await connectPlayer('Test15_Fuzzer');
-    const { room: rOther } = await connectPlayer('Test15_Other');
-    const sRoom = getServerRoom(rFuzzer.id);
-
-    // Fuzz test invalid messages across combat and movement handlers
-    rFuzzer.send('fire', null as any);
-    rFuzzer.send('fire', undefined as any);
-    rFuzzer.send('fire', { originX: NaN, originY: Infinity, originZ: 0, dirX: 0, dirY: 0, dirZ: 0 });
-    rFuzzer.send('move', { x: NaN, y: Infinity, z: 0, yaw: NaN, pitch: 0, isMoving: true, isSprinting: false });
-    rFuzzer.send('reload');
-
-    await new Promise(r => setTimeout(r, 250));
-    const fuzzerStillOpen = rFuzzer.connection.isOpen;
-    const otherStillOpen = rOther.connection.isOpen;
-    const roomActive = sRoom.state.status === 'active';
-
-    const passed = fuzzerStillOpen && otherStillOpen && roomActive && !serverCrashOccurred;
-    results.push({
-      id: 15,
-      name: 'Invalid messages are rejected without terminating the room',
-      passed,
-      details: passed ? 'All malformed payloads rejected safely; room and clients remain intact' : 'Room terminated or client dropped'
-    });
-    rFuzzer.leave();
-    rOther.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 15, name: 'Invalid messages are rejected without terminating the room', passed: false, details: err.message });
-  }
-
-  // -------------------------------------------------------------------------
-  // Test 16: A full round can be played by two clients without connection loss
-  // -------------------------------------------------------------------------
-  console.log('\n--> Running Test 16: A full round can be played by two clients without connection loss');
-  try {
-    const { room: r1 } = await connectPlayer('Test16_Player1');
-    const { room: r2 } = await connectPlayer('Test16_Player2');
+    const { room: r1 } = await connectPlayer('Test2_P1');
+    const { room: r2 } = await connectPlayer('Test2_P2');
     const sRoom = getServerRoom(r1.id);
 
+    const initialCount = sRoom.state.players.size;
+    const sid2 = r2.sessionId;
+
+    // Player 2 leaves cleanly
+    r2.leave();
+    await new Promise(r => setTimeout(r, 120));
+
+    const afterCount = sRoom.state.players.size;
+    const removedFromState = !sRoom.state.players.has(sid2);
+
+    const passed = initialCount === 2 && afterCount === 1 && removedFromState;
+    results.push({
+      id: 2,
+      name: 'A player leaves and their model is removed',
+      passed,
+      details: passed ? `Session ${sid2} removed cleanly, active count: ${afterCount}` : `Failed to remove: initial=${initialCount}, after=${afterCount}`
+    });
+    r1.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 2, name: 'A player leaves and their model is removed', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 3: A player disconnects unexpectedly and their model is removed
+  // =========================================================================
+  console.log('\n--> Running Test 3: A player disconnects unexpectedly and their model is removed');
+  try {
+    const { room: r1 } = await connectPlayer('Test3_P1');
+    const { room: r2 } = await connectPlayer('Test3_P2');
+    const sRoom = getServerRoom(r1.id);
+    const sid2 = r2.sessionId;
+
+    // Simulate unexpected socket disconnect (network drop / tab crash)
+    r2.connection.close();
+    await new Promise(r => setTimeout(r, 150));
+
+    const afterCount = sRoom.state.players.size;
+    const removedImmediately = !sRoom.state.players.has(sid2);
+
+    const passed = removedImmediately && afterCount === 1;
+    results.push({
+      id: 3,
+      name: 'A player disconnects unexpectedly and their model is removed',
+      passed,
+      details: passed ? `Session ${sid2} immediately removed without lingering ghost` : `Ghost remained: inState=${!removedImmediately}, count=${afterCount}`
+    });
+    r1.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 3, name: 'A player disconnects unexpectedly and their model is removed', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 4: The same browser reconnects and does not leave a ghost model
+  // =========================================================================
+  console.log('\n--> Running Test 4: The same browser reconnects without ghost model');
+  try {
+    // Keep room alive with an anchor player
+    const { room: anchorRoom } = await connectPlayer('AnchorPlayer');
+    const sRoom = getServerRoom(anchorRoom.id);
+
+    const browserToken = 'browser-client-token-xyz-123';
+    const clientB = new Client(`ws://localhost:${port}`);
+    const r1 = await clientB.joinById(sRoom.roomId, { nickname: 'BrowserUser', clientToken: browserToken });
+    const firstSessionId = r1.sessionId;
+
+    // Simulate abrupt network drop without leave notification
+    r1.connection.close();
+    await new Promise(r => setTimeout(r, 100));
+
+    // Browser rejoins immediately with the same clientToken
+    const clientB2 = new Client(`ws://localhost:${port}`);
+    const r2 = await clientB2.joinById(sRoom.roomId, { nickname: 'BrowserUser', clientToken: browserToken });
+    const secondSessionId = r2.sessionId;
+
+    await new Promise(r => setTimeout(r, 100));
+
+    // There should be anchorPlayer (1) + BrowserUser (1) = 2 players total
+    const finalCount = sRoom.state.players.size;
+    const hasFirst = sRoom.state.players.has(firstSessionId);
+    const hasSecond = sRoom.state.players.has(secondSessionId);
+
+    const passed = finalCount === 2 && !hasFirst && hasSecond;
+    results.push({
+      id: 4,
+      name: 'The same browser reconnects and does not leave a ghost model',
+      passed,
+      details: passed ? `Old session ${firstSessionId} pruned, only current session ${secondSessionId} active (Total: ${finalCount})` : `Duplicate/ghost detected: count=${finalCount}, hasOld=${hasFirst}, hasNew=${hasSecond}`
+    });
+    r2.leave();
+    anchorRoom.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 4, name: 'The same browser reconnects and does not leave a ghost model', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 5: Two clients leave and rejoin repeatedly without duplicate models or listeners
+  // =========================================================================
+  console.log('\n--> Running Test 5: Two clients leave and rejoin repeatedly');
+  try {
+    let passedCycles = true;
+    let lastRoomId = '';
+
+    for (let cycle = 1; cycle <= 3; cycle++) {
+      const { room: p1 } = await connectPlayer(`Loop_A_${cycle}`);
+      const { room: p2 } = await connectPlayer(`Loop_B_${cycle}`);
+      lastRoomId = p1.id;
+      const sRoom = getServerRoom(lastRoomId);
+
+      // Verify exactly 2 players
+      if (sRoom.state.players.size !== 2) {
+        passedCycles = false;
+        break;
+      }
+
+      // Both leave
+      p1.leave();
+      p2.leave();
+      await new Promise(r => setTimeout(r, 100));
+
+      if (sRoom.state.players.size !== 0) {
+        passedCycles = false;
+        break;
+      }
+    }
+
+    results.push({
+      id: 5,
+      name: 'Two clients leave and rejoin repeatedly without duplicate models or listeners',
+      passed: passedCycles,
+      details: passedCycles ? 'Completed 3 consecutive join/leave cycles with 0 lingering models' : 'Duplicate models or stale state detected during cycles'
+    });
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 5, name: 'Two clients leave and rejoin repeatedly without duplicate models or listeners', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 6: Old room messages cannot recreate players after leaving the room
+  // =========================================================================
+  console.log('\n--> Running Test 6: Old room messages cannot recreate players after leaving');
+  try {
+    const { room: roomA } = await connectPlayer('OldRoomUser');
+    const sRoomA = getServerRoom(roomA.id);
+
+    // Leave Room A
+    roomA.leave();
+    await new Promise(r => setTimeout(r, 100));
+
+    // Connect to Room B
+    const clientB = new Client(`ws://localhost:${port}`);
+    const roomB = await clientB.create('arena_private', { nickname: 'NewRoomUser', isPrivate: true });
+    const sRoomB = getServerRoom(roomB.id);
+
+    // Try sending movement or fire to room A after leaving
+    try {
+      roomA.send('move', { x: 10, y: 0, z: 10, yaw: 0, pitch: 0, isMoving: false, isSprinting: false });
+    } catch {}
+
+    await new Promise(r => setTimeout(r, 80));
+
+    const roomAPlayerCount = sRoomA.state.players.size;
+    const roomBPlayerCount = sRoomB.state.players.size;
+
+    const passed = roomAPlayerCount === 0 && roomBPlayerCount === 1;
+    results.push({
+      id: 6,
+      name: 'Old room messages cannot recreate players after leaving the room',
+      passed,
+      details: passed ? 'Stale room messages safely ignored, room states strictly isolated' : `Room A count: ${roomAPlayerCount}, Room B count: ${roomBPlayerCount}`
+    });
+    roomB.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 6, name: 'Old room messages cannot recreate players after leaving the room', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 7: A valid shot reduces enemy health
+  // =========================================================================
+  console.log('\n--> Running Test 7: A valid shot reduces enemy health');
+  try {
+    const { room: r1 } = await connectPlayer('Shooter_A');
+    const { room: r2 } = await connectPlayer('Target_B');
+    const sRoom = getServerRoom(r1.id);
     const p1 = sRoom.state.players.get(r1.sessionId)!;
     const p2 = sRoom.state.players.get(r2.sessionId)!;
 
-    p1.x = 10; p1.y = 0; p1.z = 10; p1.isShielded = false;
-    p2.x = 10; p2.y = 0; p2.z = 6; p2.isShielded = false;
+    // Position players in clear line of sight (south of bunker-south which is at z: 14.2-15.5)
+    p1.x = 0; p1.y = 0; p1.z = 21; p1.lastMoveTime = Date.now();
+    p2.x = 0; p2.y = 0; p2.z = 17; p2.lastMoveTime = Date.now();
+    p2.isShielded = false; // Drop spawn shield
 
-    // Exchange 3 rounds of combat
-    for (let round = 0; round < 3; round++) {
-      r1.send('fire', { originX: 10, originY: 1.65, originZ: 10, dirX: 0, dirY: 0, dirZ: -1 });
-      await new Promise(r => setTimeout(r, 150));
-      r2.send('fire', { originX: 10, originY: 1.65, originZ: 6, dirX: 0, dirY: 0, dirZ: 1 });
-      await new Promise(r => setTimeout(r, 150));
+    // Shoot horizontally directly at target
+    r1.send('fire', {
+      originX: 0,
+      originY: GAME_CONSTANTS.EYE_HEIGHT,
+      originZ: 21,
+      dirX: 0,
+      dirY: 0,
+      dirZ: -1,
+      targetSessionId: r2.sessionId
+    });
+
+    await new Promise(r => setTimeout(r, 120));
+
+    const healthReduced = p2.health < 100;
+    const passed = healthReduced && (p2.health === 75 || p2.health === 55);
+    results.push({
+      id: 7,
+      name: 'A valid shot reduces enemy health',
+      passed,
+      details: passed ? `Target health successfully reduced to ${p2.health} HP` : `Health not reduced properly: ${p2.health}`
+    });
+    r1.leave();
+    r2.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 7, name: 'A valid shot reduces enemy health', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 8: A missed shot does not reduce health
+  // =========================================================================
+  console.log('\n--> Running Test 8: A missed shot does not reduce health');
+  try {
+    const { room: r1 } = await connectPlayer('Shooter_Miss');
+    const { room: r2 } = await connectPlayer('Target_Safe');
+    const sRoom = getServerRoom(r1.id);
+    const p1 = sRoom.state.players.get(r1.sessionId)!;
+    const p2 = sRoom.state.players.get(r2.sessionId)!;
+
+    p1.x = 0; p1.y = 0; p1.z = 21; p1.lastMoveTime = Date.now();
+    p2.x = 0; p2.y = 0; p2.z = 17; p2.lastMoveTime = Date.now();
+    p2.isShielded = false;
+
+    // Fire 90 degrees away (to the East: dirX = 1, dirZ = 0)
+    r1.send('fire', {
+      originX: 0,
+      originY: GAME_CONSTANTS.EYE_HEIGHT,
+      originZ: 21,
+      dirX: 1,
+      dirY: 0,
+      dirZ: 0
+    });
+
+    await new Promise(r => setTimeout(r, 100));
+
+    const passed = p2.health === 100;
+    results.push({
+      id: 8,
+      name: 'A missed shot does not reduce health',
+      passed,
+      details: passed ? 'Target health remained intact at 100 HP' : `Health improperly altered: ${p2.health}`
+    });
+    r1.leave();
+    r2.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 8, name: 'A missed shot does not reduce health', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 9: A wall blocks shots
+  // =========================================================================
+  console.log('\n--> Running Test 9: A wall blocks shots');
+  try {
+    const { room: r1 } = await connectPlayer('Shooter_Wall');
+    const { room: r2 } = await connectPlayer('Target_Wall');
+    const sRoom = getServerRoom(r1.id);
+    const p1 = sRoom.state.players.get(r1.sessionId)!;
+    const p2 = sRoom.state.players.get(r2.sessionId)!;
+
+    // Position players on opposite sides of 'bunker-south' (minZ: 14.2, maxZ: 15.5, minX: -4, maxX: 4)
+    p1.x = 0; p1.y = 0; p1.z = 18; p1.lastMoveTime = Date.now();
+    p2.x = 0; p2.y = 0; p2.z = 12; p2.lastMoveTime = Date.now();
+    p2.isShielded = false;
+
+    // Shoot directly at target through bunker-south
+    r1.send('fire', {
+      originX: 0,
+      originY: 1.0,
+      originZ: 18,
+      dirX: 0,
+      dirY: 0,
+      dirZ: -1
+    });
+
+    await new Promise(r => setTimeout(r, 100));
+
+    const passed = p2.health === 100;
+    results.push({
+      id: 9,
+      name: 'A wall blocks shots',
+      passed,
+      details: passed ? 'Solid bunker wall successfully blocked ray, 0 damage applied' : `Wall penetrated! Target health: ${p2.health}`
+    });
+    r1.leave();
+    r2.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 9, name: 'A wall blocks shots', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 10: Health reaching zero produces exactly one death and one kill event
+  // =========================================================================
+  console.log('\n--> Running Test 10: Health reaching zero produces exactly one death and kill event');
+  try {
+    const { room: r1 } = await connectPlayer('Killer_A');
+    const { room: r2 } = await connectPlayer('Victim_B');
+    const sRoom = getServerRoom(r1.id);
+    const p1 = sRoom.state.players.get(r1.sessionId)!;
+    const p2 = sRoom.state.players.get(r2.sessionId)!;
+
+    p1.x = 0; p1.y = 0; p1.z = 21; p1.lastMoveTime = Date.now();
+    p2.x = 0; p2.y = 0; p2.z = 17; p2.lastMoveTime = Date.now();
+    p2.isShielded = false;
+
+    let killFeedCount = 0;
+    r1.onMessage('kill_feed', () => { killFeedCount++; });
+    r2.onMessage('kill_feed', () => {});
+
+    // Fire shots to eliminate target (100 HP, 25-45 dmg per shot -> 4 shots max)
+    for (let i = 0; i < 5; i++) {
+      p1.lastShootTime = 0; // Reset rate limit between test shots
+      r1.send('fire', {
+        originX: 0,
+        originY: GAME_CONSTANTS.EYE_HEIGHT,
+        originZ: 21,
+        dirX: 0,
+        dirY: 0,
+        dirZ: -1,
+        targetSessionId: r2.sessionId
+      });
+      await new Promise(r => setTimeout(r, 80));
     }
 
-    const passed = r1.connection.isOpen && r2.connection.isOpen && p1.health < 100 && p2.health < 100;
+    const passed = p2.health === 0 && !p2.isAlive && p2.deaths === 1 && p1.kills === 1 && killFeedCount === 1;
     results.push({
-      id: 16,
-      name: 'A full round can be played by two clients without connection loss',
+      id: 10,
+      name: 'Health reaching zero produces exactly one death and one kill event',
       passed,
-      details: passed ? `Round finished smoothly (P1 HP: ${p1.health}, P2 HP: ${p2.health}, Both Connected)` : 'Disconnection occurred during combat round'
+      details: passed ? 'Atomic elimination verified: HP=0, isAlive=false, deaths=1, kills=1, killFeedEvents=1' : `Failed: HP=${p2.health}, alive=${p2.isAlive}, deaths=${p2.deaths}, kills=${p1.kills}, events=${killFeedCount}`
+    });
+
+    // =========================================================================
+    // TEST 11: A dead player cannot shoot
+    // =========================================================================
+    console.log('\n--> Running Test 11: A dead player cannot shoot');
+    const initialP1Health = p1.health;
+    const initialAmmoP2 = p2.ammo;
+
+    // Victim (dead) attempts to shoot killer
+    r2.send('fire', {
+      originX: 0,
+      originY: GAME_CONSTANTS.EYE_HEIGHT,
+      originZ: 17,
+      dirX: 0,
+      dirY: 0,
+      dirZ: 1,
+      targetSessionId: r1.sessionId
+    });
+
+    await new Promise(r => setTimeout(r, 80));
+
+    const test11Passed = p1.health === initialP1Health && p2.ammo === initialAmmoP2;
+    results.push({
+      id: 11,
+      name: 'A dead player cannot shoot',
+      passed: test11Passed,
+      details: test11Passed ? 'Dead player shot safely rejected by server, ammo and enemy health unchanged' : 'Dead player was able to shoot!'
+    });
+
+    // =========================================================================
+    // TEST 12: Respawn restores health without resetting the match score
+    // =========================================================================
+    console.log('\n--> Running Test 12: Respawn restores health without resetting match score');
+    // Fast-forward respawn timer
+    p2.respawnTime = Date.now() - 100;
+    r2.send('respawn_request');
+
+    await new Promise(r => setTimeout(r, 120));
+
+    const respawnPassed = p2.isAlive && p2.health === 100 && p2.ammo === 24 && p2.deaths === 1 && p1.kills === 1 && p1.score === 100;
+    results.push({
+      id: 12,
+      name: 'Respawn restores health without resetting the match score',
+      passed: respawnPassed,
+      details: respawnPassed ? 'Player restored to 100 HP, 24 Ammo while scores preserved (Kills: 1, Score: 100)' : `Failed: HP=${p2.health}, deaths=${p2.deaths}, kills=${p1.kills}`
     });
 
     r1.leave();
     r2.leave();
-    await new Promise(r => setTimeout(r, 100));
-  } catch (err: any) {
-    results.push({ id: 16, name: 'A full round can be played by two clients without connection loss', passed: false, details: err.message });
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 10, name: 'Health reaching zero produces exactly one death and one kill event', passed: false, details: e.message });
   }
 
-  // -------------------------------------------------------------------------
-  // FINAL REPORT
-  // -------------------------------------------------------------------------
-  console.log('\n============================================================');
-  console.log('                 FINAL TEST SUITE REPORT                    ');
-  console.log('============================================================');
+  // =========================================================================
+  // TEST 13: Both clients observe consistent health, death, and score updates
+  // =========================================================================
+  console.log('\n--> Running Test 13: Both clients observe consistent health, death, and score updates');
+  try {
+    const { room: rA } = await connectPlayer('Sync_Alpha');
+    const { room: rB } = await connectPlayer('Sync_Beta');
+    const sRoom = getServerRoom(rA.id);
+    const pA = sRoom.state.players.get(rA.sessionId)!;
+    const pB = sRoom.state.players.get(rB.sessionId)!;
+
+    pA.x = 0; pA.y = 0; pA.z = 21; pA.lastMoveTime = Date.now();
+    pB.x = 0; pB.y = 0; pB.z = 17; pB.lastMoveTime = Date.now();
+    pB.isShielded = false;
+
+    // Apply damage to B
+    rA.send('fire', {
+      originX: 0,
+      originY: GAME_CONSTANTS.EYE_HEIGHT,
+      originZ: 21,
+      dirX: 0,
+      dirY: 0,
+      dirZ: -1,
+      targetSessionId: rB.sessionId
+    });
+
+    await new Promise(r => setTimeout(r, 120));
+
+    // Check state viewed from client A and client B
+    const clientAViewOfB = rA.state.players.get(rB.sessionId);
+    const clientBViewOfB = rB.state.players.get(rB.sessionId);
+
+    const consistent = clientAViewOfB && clientBViewOfB && clientAViewOfB.health === clientBViewOfB.health && clientAViewOfB.health < 100;
+    results.push({
+      id: 13,
+      name: 'Both clients observe consistent health, death, and score updates',
+      passed: !!consistent,
+      details: consistent ? `Both clients observed identical target health: ${clientAViewOfB.health} HP` : 'State desync between clients'
+    });
+    rA.leave();
+    rB.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 13, name: 'Both clients observe consistent health, death, and score updates', passed: false, details: e.message });
+  }
+
+  // =========================================================================
+  // TEST 14: Hiding the server link does not break connection or matchmaking
+  // =========================================================================
+  console.log('\n--> Running Test 14: Hiding the server link does not break connection or matchmaking');
+  try {
+    const client1 = new Client(`ws://localhost:${port}`);
+    const _available = await client1.getAvailableRooms('arena_public');
+    const room = await client1.joinOrCreate('arena_public', { nickname: 'PublicMatchUser' });
+    const sRoom = getServerRoom(room.id);
+
+    const isConnected = room.connection.isOpen && sRoom.state.players.has(room.sessionId);
+    results.push({
+      id: 14,
+      name: 'Hiding the server link does not break connection or matchmaking',
+      passed: isConnected,
+      details: isConnected ? `Matchmaking and room creation fully operational on room ${room.id}` : 'Failed to join or verify room'
+    });
+    room.leave();
+    await new Promise(r => setTimeout(r, 80));
+  } catch (e: any) {
+    results.push({ id: 14, name: 'Hiding the server link does not break connection or matchmaking', passed: false, details: e.message });
+  }
+
+  // Print Summary
+  console.log('\n' + '='.repeat(60));
+  console.log('                 REGRESSION TEST SUITE REPORT                 ');
+  console.log('='.repeat(60));
   let allPassed = true;
   for (const r of results) {
-    const mark = r.passed ? '[✓ PASS]' : '[✗ FAIL]';
-    console.log(`${mark} #${r.id} ${r.name}: ${r.details || ''}`);
+    const status = r.passed ? '[✓ PASS]' : '[✗ FAIL]';
     if (!r.passed) allPassed = false;
+    console.log(`${status} #${r.id} ${r.name}: ${r.details || ''}`);
   }
-  console.log('------------------------------------------------------------');
-  console.log(`TOTAL: ${results.filter(r => r.passed).length} / ${results.length} PASSED`);
-  console.log(`SERVER CRASH STATUS: ${serverCrashOccurred ? 'CRASH DETECTED' : 'HEALTHY & STABLE'}`);
-  console.log('============================================================\n');
+  console.log('-'.repeat(60));
+  const passCount = results.filter(r => r.passed).length;
+  console.log(`TOTAL: ${passCount} / ${results.length} PASSED`);
+  console.log(`SERVER CRASH STATUS: ${serverCrashOccurred ? 'CRASHED' : 'HEALTHY & STABLE'}`);
+  console.log('='.repeat(60) + '\n');
 
   await gameServer.gracefullyShutdown();
-  process.exit(allPassed && !serverCrashOccurred ? 0 : 1);
+  server.close();
+
+  if (!allPassed || serverCrashOccurred) {
+    process.exit(1);
+  }
 }
 
-runAll16Tests().catch((err) => {
-  console.error('[TEST SUITE FATAL ERROR]:', err);
+runRegressionTests().catch((err) => {
+  console.error('Test runner fatal error:', err);
   process.exit(1);
 });

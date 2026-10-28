@@ -257,6 +257,8 @@ export class RemotePlayer {
       redraw = true;
     }
 
+    if (typeof state.maxHealth === 'number') this.maxHealth = state.maxHealth;
+
     if (redraw) {
       this.redrawBillboard();
     }
@@ -309,20 +311,33 @@ export class RemotePlayer {
   }
 
   public dispose() {
+    this.isAlive = false;
     this.billboardTexture.dispose();
+    if (this.billboardSprite && this.billboardSprite.material) {
+      this.billboardSprite.material.dispose();
+    }
+
+    const uniqueGeometries = new Set<THREE.BufferGeometry>();
+    const uniqueMaterials = new Set<THREE.Material>();
+
     this.group.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const mesh = obj as THREE.Mesh;
-        mesh.geometry.dispose();
+        if (mesh.geometry) uniqueGeometries.add(mesh.geometry);
         if (Array.isArray(mesh.material)) {
-          mesh.material.forEach((m) => m.dispose());
+          mesh.material.forEach((m) => m && uniqueMaterials.add(m));
         } else if (mesh.material) {
-          mesh.material.dispose();
+          uniqueMaterials.add(mesh.material);
         }
       }
     });
+
+    uniqueGeometries.forEach((geo) => geo.dispose());
+    uniqueMaterials.forEach((mat) => mat.dispose());
+
     if (this.group.parent) {
       this.group.parent.remove(this.group);
     }
+    this.group.clear();
   }
 }

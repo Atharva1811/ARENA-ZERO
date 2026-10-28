@@ -2,6 +2,7 @@ export interface JoinRoomOptions {
   nickname: string;
   roomCode?: string;
   isPrivate?: boolean;
+  clientToken?: string;
 }
 
 export interface PlayerInputPayload {
