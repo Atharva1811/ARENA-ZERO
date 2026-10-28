@@ -27,6 +27,7 @@ export const App: React.FC = () => {
   // App & Connection state
   const [appMode, setAppMode] = useState<'MENU' | 'PLAYING'>('MENU');
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const [matchmakingStatus, setMatchmakingStatus] = useState<'searching' | 'found' | 'connecting' | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | undefined>(undefined);
 
@@ -72,11 +73,16 @@ export const App: React.FC = () => {
     setIsScoreboardOpen(false);
   }, []);
 
-  // Setup connection error callback
+  // Setup connection error & matchmaking callbacks
   useEffect(() => {
     colyseusRef.current.onError = (err) => {
       setConnectionError(err);
       setIsConnecting(false);
+      setMatchmakingStatus(null);
+    };
+
+    colyseusRef.current.onMatchmakingStatus = (status) => {
+      setMatchmakingStatus(status);
     };
 
     colyseusRef.current.onReconnecting = (attempt, maxAttempts) => {
@@ -213,12 +219,15 @@ export const App: React.FC = () => {
   const handleJoinPublic = async (nickname: string) => {
     setIsConnecting(true);
     setConnectionError(null);
+    setMatchmakingStatus('searching');
     try {
       const room = await colyseusRef.current.joinPublic(nickname);
       setRoomCode(room.state?.roomCode || undefined);
+      setMatchmakingStatus(null);
       initEngine();
     } catch (err: any) {
       setIsConnecting(false);
+      setMatchmakingStatus(null);
       setConnectionError(err.message || 'Failed to connect to public arena.');
     }
   };
@@ -226,12 +235,15 @@ export const App: React.FC = () => {
   const handleCreatePrivate = async (nickname: string) => {
     setIsConnecting(true);
     setConnectionError(null);
+    setMatchmakingStatus('connecting');
     try {
       const room = await colyseusRef.current.createPrivate(nickname);
       setRoomCode(room.state?.roomCode || undefined);
+      setMatchmakingStatus(null);
       initEngine();
     } catch (err: any) {
       setIsConnecting(false);
+      setMatchmakingStatus(null);
       setConnectionError(err.message || 'Failed to create private match.');
     }
   };
@@ -239,12 +251,15 @@ export const App: React.FC = () => {
   const handleJoinPrivate = async (nickname: string, code: string) => {
     setIsConnecting(true);
     setConnectionError(null);
+    setMatchmakingStatus('connecting');
     try {
       const room = await colyseusRef.current.joinPrivate(nickname, code);
       setRoomCode(room.state?.roomCode || code);
+      setMatchmakingStatus(null);
       initEngine();
     } catch (err: any) {
       setIsConnecting(false);
+      setMatchmakingStatus(null);
       setConnectionError(err.message || `Failed to join room '${code}'.`);
     }
   };
@@ -308,6 +323,7 @@ export const App: React.FC = () => {
           onJoinPrivate={handleJoinPrivate}
           serverUrl={serverUrl}
           isConnecting={isConnecting}
+          matchmakingStatus={matchmakingStatus}
           connectionError={connectionError}
           onClearError={() => setConnectionError(null)}
           soundEnabled={soundEnabled}
@@ -325,6 +341,7 @@ export const App: React.FC = () => {
           isReloading={isReloading}
           matchTimeSeconds={matchTime}
           roomCode={roomCode}
+          playerCount={players.length}
           killFeed={killFeed}
           showHitmarker={showHitmarker}
           isHeadshotHit={isHeadshotHit}

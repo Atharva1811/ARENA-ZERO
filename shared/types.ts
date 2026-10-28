@@ -66,3 +66,12 @@ export interface MatchWinnerPayload {
   winnerName: string;
   kills: number;
 }
+
+export interface SpawnConfirmedPayload {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  isShielded?: boolean;
+  shieldExpiryTime?: number;
+}

@@ -10,6 +10,8 @@ interface FPSHUDProps {
   isReloading: boolean;
   matchTimeSeconds: number;
   roomCode?: string;
+  playerCount?: number;
+  maxClients?: number;
   killFeed: KillFeedItem[];
   showHitmarker: boolean;
   isHeadshotHit: boolean;
@@ -26,6 +28,8 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
   isReloading,
   matchTimeSeconds,
   roomCode,
+  playerCount = 1,
+  maxClients = 8,
   killFeed,
   showHitmarker,
   isHeadshotHit,
@@ -71,6 +75,15 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
             {copiedCode && <span className="copied-tooltip">Link Copied!</span>}
           </div>
         )}
+
+        {/* Player Count & Matchmaking Status */}
+        <div className="hud-players-badge">
+          <span className="players-label">COMBATANTS:</span>
+          <span className="players-count">{playerCount} / {maxClients}</span>
+          {playerCount <= 1 && (
+            <span className="waiting-tag">WAITING FOR FOES</span>
+          )}
+        </div>
 
         <div className="hud-match-timer">
           <Clock size={16} className="timer-icon" />

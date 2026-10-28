@@ -40,9 +40,13 @@ const gameServer = new Server({
   }),
 });
 
-// Register Colyseus rooms
-gameServer.define('arena_public', ArenaRoom);
-gameServer.define('arena_private', ArenaRoom);
+// Register Colyseus rooms with matchmaking rules
+gameServer.define('arena_public', ArenaRoom)
+  .enableRealtimeListing();
+
+gameServer.define('arena_private', ArenaRoom)
+  .filterBy(['roomCode'])
+  .enableRealtimeListing();
 
 gameServer.listen(port).then(() => {
   console.log(`⚡ Arena Zero Server listening on port ${port}`);

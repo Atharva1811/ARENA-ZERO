@@ -1,4 +1,5 @@
 import { Client, Room } from 'colyseus.js';
+import { GAME_CONSTANTS } from '../../shared/constants';
 import type {
   JoinRoomOptions,
   PlayerInputPayload,
@@ -8,6 +9,7 @@ import type {
   KillFeedItem,
   WeaponTracerEvent,
   MatchWinnerPayload,
+  SpawnConfirmedPayload,
 } from '../../shared/types';
 
 export class ColyseusManager {
@@ -37,6 +39,7 @@ export class ColyseusManager {
   public onDamageReceived?: (data: DamageReceivedPayload) => void;
   public onKillFeed?: (data: KillFeedItem) => void;
   public onWeaponTracer?: (data: WeaponTracerEvent) => void;
+  public onInitSpawn?: (data: SpawnConfirmedPayload) => void;
   public onRespawnConfirmed?: (data: { x: number; y: number; z: number; yaw: number }) => void;
   public onMatchOver?: (data: MatchWinnerPayload) => void;
   public onAnnouncement?: (data: { message: string }) => void;
@@ -44,6 +47,7 @@ export class ColyseusManager {
   public onDisconnect?: () => void;
   public onReconnecting?: (attempt: number, maxAttempts: number) => void;
   public onReconnected?: () => void;
+  public onMatchmakingStatus?: (status: 'searching' | 'found' | 'connecting') => void;
 
   constructor() {
     this.serverUrl = this.resolveServerUrl();
@@ -74,7 +78,38 @@ export class ColyseusManager {
 
   public async joinPublic(nickname: string): Promise<Room> {
     const options: JoinRoomOptions = { nickname };
-    return this.connect(() => this.client.joinOrCreate('arena_public', options));
+
+    return this.connect(async () => {
+      this.onMatchmakingStatus?.('searching');
+
+      try {
+        // Query active public rooms from Colyseus listing
+        const availableRooms = await this.client.getAvailableRooms('arena_public');
+
+        // Find an open, non-full, non-finished public room
+        const eligible = availableRooms.find((r) => {
+          const max = r.maxClients || GAME_CONSTANTS.ROOM_CAPACITY;
+          const notFull = r.clients < max;
+          const notPrivate = !r.metadata?.isPrivate;
+          const notFinished = r.metadata?.status !== 'finished';
+          return notFull && notPrivate && notFinished;
+        });
+
+        if (eligible) {
+          this.onMatchmakingStatus?.('found');
+          try {
+            return await this.client.joinById(eligible.roomId, options);
+          } catch (joinByIdErr) {
+            console.warn('[ColyseusManager] joinById failed (room may have filled), falling back to joinOrCreate:', joinByIdErr);
+          }
+        }
+      } catch (getRoomsErr) {
+        console.warn('[ColyseusManager] getAvailableRooms failed, falling back to joinOrCreate:', getRoomsErr);
+      }
+
+      this.onMatchmakingStatus?.('connecting');
+      return await this.client.joinOrCreate('arena_public', options);
+    });
   }
 
   public async createPrivate(nickname: string): Promise<Room> {
@@ -152,6 +187,10 @@ export class ColyseusManager {
 
     room.onMessage('weapon_tracer', (data: WeaponTracerEvent) => {
       this.onWeaponTracer?.(data);
+    });
+
+    room.onMessage('init_spawn', (data: SpawnConfirmedPayload) => {
+      this.onInitSpawn?.(data);
     });
 
     room.onMessage('respawn_confirmed', (data: { x: number; y: number; z: number; yaw: number }) => {

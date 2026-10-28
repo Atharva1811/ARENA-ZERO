@@ -29,6 +29,114 @@ const PLAYER_COLORS = [
   '#ffff00', // Yellow
 ];
 
+interface CylinderHitResult {
+  hit: boolean;
+  dist: number;
+  hitX: number;
+  hitY: number;
+  hitZ: number;
+  isHeadshot: boolean;
+}
+
+/**
+ * Authoritative 3D Finite Vertical Cylinder Raycast
+ */
+function intersectRayCylinder(
+  originX: number,
+  originY: number,
+  originZ: number,
+  nx: number,
+  ny: number,
+  nz: number,
+  centerX: number,
+  centerY: number,
+  centerZ: number,
+  radius: number,
+  height: number
+): CylinderHitResult {
+  const ox = originX - centerX;
+  const oz = originZ - centerZ;
+
+  const a = nx * nx + nz * nz;
+  if (a < 1e-6) {
+    // Purely vertical ray
+    const distSq = ox * ox + oz * oz;
+    if (distSq <= radius * radius && ny !== 0) {
+      const t1 = (centerY - originY) / ny;
+      const t2 = (centerY + height - originY) / ny;
+      const tMin = Math.min(t1, t2);
+      const tMax = Math.max(t1, t2);
+      if (tMax >= 0.3) {
+        const tHit = Math.max(0.3, tMin);
+        const py = originY + ny * tHit;
+        return {
+          hit: true,
+          dist: tHit,
+          hitX: originX,
+          hitY: py,
+          hitZ: originZ,
+          isHeadshot: py >= centerY + height - 0.45,
+        };
+      }
+    }
+    return { hit: false, dist: Infinity, hitX: 0, hitY: 0, hitZ: 0, isHeadshot: false };
+  }
+
+  const b = 2 * (ox * nx + oz * nz);
+  const c = ox * ox + oz * oz - radius * radius;
+  const disc = b * b - 4 * a * c;
+
+  if (disc < 0) {
+    return { hit: false, dist: Infinity, hitX: 0, hitY: 0, hitZ: 0, isHeadshot: false };
+  }
+
+  const sqrtDisc = Math.sqrt(disc);
+  const t1 = (-b - sqrtDisc) / (2 * a);
+  const t2 = (-b + sqrtDisc) / (2 * a);
+
+  if (t2 < 0.3) {
+    return { hit: false, dist: Infinity, hitX: 0, hitY: 0, hitZ: 0, isHeadshot: false };
+  }
+
+  const tStart = Math.max(0.3, t1);
+  const tEnd = t2;
+
+  const yStart = originY + ny * tStart;
+  const yEnd = originY + ny * tEnd;
+  const minY = Math.min(yStart, yEnd);
+  const maxY = Math.max(yStart, yEnd);
+
+  const cylinderTop = centerY + height + 0.15; // Upper tolerance for head
+  const cylinderBottom = centerY;
+
+  if (maxY < cylinderBottom || minY > cylinderTop) {
+    return { hit: false, dist: Infinity, hitX: 0, hitY: 0, hitZ: 0, isHeadshot: false };
+  }
+
+  let tHit = tStart;
+  if (yStart > cylinderTop && ny < 0) {
+    const tCap = (cylinderTop - originY) / ny;
+    if (tCap >= 0.3 && tCap <= tEnd) tHit = tCap;
+  } else if (yStart < cylinderBottom && ny > 0) {
+    const tCap = (cylinderBottom - originY) / ny;
+    if (tCap >= 0.3 && tCap <= tEnd) tHit = tCap;
+  }
+
+  const px = originX + nx * tHit;
+  const py = originY + ny * tHit;
+  const pz = originZ + nz * tHit;
+  const isHeadshot = py >= centerY + height - 0.45;
+
+  return {
+    hit: true,
+    dist: tHit,
+    hitX: px,
+    hitY: py,
+    hitZ: pz,
+    isHeadshot,
+  };
+}
+
 export class ArenaRoom extends Room<ArenaState> {
   maxClients = GAME_CONSTANTS.ROOM_CAPACITY;
   private matchTimerInterval: NodeJS.Timeout | null = null;
@@ -38,13 +146,26 @@ export class ArenaRoom extends Room<ArenaState> {
     console.error(`[ArenaRoom Error in ${methodName}] Room: ${this.roomId}:`, error);
   }
 
+  private updateRoomMetadata() {
+    this.setMetadata({
+      roomCode: this.state.roomCode,
+      isPrivate: this.state.isPrivate,
+      playerCount: this.clients.length,
+      maxClients: this.maxClients,
+      status: this.state.status,
+    });
+  }
+
   onCreate(options: JoinRoomOptions) {
     this.setState(new ArenaState());
 
     if (options.isPrivate || options.roomCode) {
       this.state.isPrivate = true;
       this.state.roomCode = options.roomCode || this.generateRoomCode();
+      this.setPrivate(true); // Exclude private rooms from public matchmaking
     }
+
+    this.updateRoomMetadata();
 
     // Set simulation update rate (20 Hz = 50ms)
     this.setSimulationInterval((deltaTime) => this.update(deltaTime), 1000 / GAME_CONSTANTS.SERVER_TICK_RATE);
@@ -130,8 +251,24 @@ export class ArenaRoom extends Room<ArenaState> {
     // Grant temporary spawn protection shield
     player.isShielded = true;
     player.shieldExpiryTime = Date.now() + GAME_CONSTANTS.SPAWN_PROTECTION_MS;
+    player.lastMoveTime = 0; // Initialize so first move is acknowledged smoothly
 
     this.state.players.set(client.sessionId, player);
+    this.updateRoomMetadata();
+
+    // Authoritative spawn notification to newly joined client
+    try {
+      client.send('init_spawn', {
+        x: player.x,
+        y: player.y,
+        z: player.z,
+        yaw: player.yaw,
+        isShielded: player.isShielded,
+        shieldExpiryTime: player.shieldExpiryTime,
+      });
+    } catch (e) {
+      console.warn(`[ArenaRoom] Failed to send init_spawn to client ${client.sessionId}:`, e);
+    }
 
     try {
       this.broadcast('server_announcement', {
@@ -153,12 +290,14 @@ export class ArenaRoom extends Room<ArenaState> {
         });
       } catch {}
       this.state.players.delete(client.sessionId);
+      this.updateRoomMetadata();
     } else {
       // Unconsented drop — hold seat for 15s to allow reconnection
       console.log(`[ArenaRoom] Client ${client.sessionId} connection dropped unconsented, awaiting reconnection...`);
       try {
         await this.allowReconnection(client, 15);
         console.log(`[ArenaRoom] Client ${client.sessionId} (${player.nickname}) successfully reconnected.`);
+        this.updateRoomMetadata();
       } catch {
         // Reconnection window expired
         if (this.state.players.has(client.sessionId)) {
@@ -168,6 +307,7 @@ export class ArenaRoom extends Room<ArenaState> {
             });
           } catch {}
           this.state.players.delete(client.sessionId);
+          this.updateRoomMetadata();
         }
       }
     }
@@ -196,8 +336,9 @@ export class ArenaRoom extends Room<ArenaState> {
       return;
     }
 
+    const isFirstMove = player.lastMoveTime === 0;
     const now = Date.now();
-    const dt = player.lastMoveTime > 0 ? (now - player.lastMoveTime) / 1000 : 0.05;
+    const dt = !isFirstMove ? (now - player.lastMoveTime) / 1000 : 0.05;
     player.lastMoveTime = now;
 
     // Enforce server-side arena obstacle collision
@@ -207,7 +348,7 @@ export class ArenaRoom extends Room<ArenaState> {
     const maxAllowedDist = GAME_CONSTANTS.MAX_CLIENT_SPEED_TOLERANCE * Math.max(0.016, dt) + 0.5;
     const movedDist = Math.hypot(resolved.x - player.x, resolved.z - player.z);
 
-    if (movedDist <= maxAllowedDist || player.lastMoveTime === 0) {
+    if (isFirstMove || movedDist <= maxAllowedDist) {
       player.x = resolved.x;
       player.z = resolved.z;
     } else {
@@ -215,6 +356,11 @@ export class ArenaRoom extends Room<ArenaState> {
       const angle = Math.atan2(resolved.z - player.z, resolved.x - player.x);
       player.x += Math.cos(angle) * maxAllowedDist;
       player.z += Math.sin(angle) * maxAllowedDist;
+    }
+
+    // Significant movement drops spawn protection
+    if (player.isShielded && movedDist > 0.8) {
+      player.isShielded = false;
     }
 
     player.y = Math.max(0, Math.min(8.0, Number.isFinite(data.y) ? data.y : 0));
@@ -307,40 +453,41 @@ export class ArenaRoom extends Room<ArenaState> {
           return;
         }
 
-        const targetCenterY = target.y + GAME_CONSTANTS.PLAYER_HEIGHT / 2;
-        const targetRadius = GAME_CONSTANTS.PLAYER_RADIUS + 0.22; // Forgiving hitbox
+        const targetRadius = GAME_CONSTANTS.PLAYER_RADIUS + 0.25; // Forgiving hitbox
 
-        // Vector from ray origin to target center
-        const ox = target.x - data.originX;
-        const oy = targetCenterY - data.originY;
-        const oz = target.z - data.originZ;
+        const hitResult = intersectRayCylinder(
+          data.originX,
+          data.originY,
+          data.originZ,
+          nx,
+          ny,
+          nz,
+          target.x,
+          target.y,
+          target.z,
+          targetRadius,
+          GAME_CONSTANTS.PLAYER_HEIGHT
+        );
 
-        // Projection along ray direction
-        const t = ox * nx + oy * ny + oz * nz;
-        if (t > 0.4 && t < bestTargetDist) {
-          const px = data.originX + nx * t;
-          const py = data.originY + ny * t;
-          const pz = data.originZ + nz * t;
+        if (hitResult.hit && hitResult.dist > 0.3 && hitResult.dist < bestTargetDist) {
+          // Verify line of sight directly to the exact impact point on the player's bounding cylinder
+          const losClear = isLineOfSightClear(
+            data.originX,
+            data.originY,
+            data.originZ,
+            hitResult.hitX,
+            hitResult.hitY,
+            hitResult.hitZ
+          );
 
-          const distSq = (target.x - px) ** 2 + (target.z - pz) ** 2;
-          const verticalDiff = Math.abs(targetCenterY - py);
-
-          if (distSq <= targetRadius * targetRadius && verticalDiff <= GAME_CONSTANTS.PLAYER_HEIGHT / 2) {
-            // Verify line of sight between shooter and target is not blocked by solid arena walls
-            const losClear = isLineOfSightClear(
-              data.originX, data.originY, data.originZ,
-              target.x, target.y + GAME_CONSTANTS.EYE_HEIGHT, target.z
-            );
-
-            if (losClear) {
-              hitTargetSessionId = targetSessionId;
-              bestTargetDist = t;
-              hitSomething = true;
-              hitX = px;
-              hitY = py;
-              hitZ = pz;
-              isHeadshot = py >= target.y + 1.35;
-            }
+          if (losClear) {
+            hitTargetSessionId = targetSessionId;
+            bestTargetDist = hitResult.dist;
+            hitSomething = true;
+            hitX = hitResult.hitX;
+            hitY = hitResult.hitY;
+            hitZ = hitResult.hitZ;
+            isHeadshot = hitResult.isHeadshot;
           }
         }
       });
@@ -541,6 +688,8 @@ export class ArenaRoom extends Room<ArenaState> {
     this.state.status = 'finished';
     this.state.winnerId = winner.sessionId;
     this.state.winnerName = winner.nickname;
+    this.lock();
+    this.updateRoomMetadata();
 
     this.broadcast('match_over', {
       winnerId: winner.sessionId,
@@ -551,6 +700,8 @@ export class ArenaRoom extends Room<ArenaState> {
 
   private endMatchByTime() {
     this.state.status = 'finished';
+    this.lock();
+    this.updateRoomMetadata();
 
     // Find highest score player
     let topPlayer: PlayerState | null = null;

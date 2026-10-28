@@ -62,6 +62,7 @@ export class ArenaEngine {
   private animationFrameId: number | null = null;
   private clock = new THREE.Clock();
   private isDisposed: boolean = false;
+  private hasInitialServerSpawn: boolean = false;
 
   constructor(container: HTMLElement, colyseus: ColyseusManager, callbacks: EngineCallbacks = {}) {
     this.container = container;
@@ -200,6 +201,12 @@ export class ArenaEngine {
       }
     };
 
+    // Initial spawn location confirmation from server
+    this.colyseus.onInitSpawn = (data) => {
+      this.fpsController.teleport(data.x, data.y, data.z, data.yaw);
+      this.hasInitialServerSpawn = true;
+    };
+
     // Respawn confirmation
     this.colyseus.onRespawnConfirmed = (data) => {
       this.isAlive = true;
@@ -249,6 +256,12 @@ export class ArenaEngine {
       });
 
       if (isSelf) {
+        // Authoritative initial teleport to server spawn position if not yet initialized
+        if (!this.hasInitialServerSpawn && Number.isFinite(player.x) && Number.isFinite(player.z)) {
+          this.fpsController.teleport(player.x, player.y || 0, player.z, player.yaw || 0);
+          this.hasInitialServerSpawn = true;
+        }
+
         // Authoritative state for self
         if (typeof player.health === 'number' && player.health !== this.health) {
           this.health = player.health;

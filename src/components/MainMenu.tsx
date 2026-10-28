@@ -7,6 +7,7 @@ interface MainMenuProps {
   onJoinPrivate: (nickname: string, code: string) => void;
   serverUrl: string;
   isConnecting: boolean;
+  matchmakingStatus?: 'searching' | 'found' | 'connecting' | null;
   connectionError: string | null;
   onClearError: () => void;
   soundEnabled: boolean;
@@ -19,6 +20,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onJoinPrivate,
   serverUrl,
   isConnecting,
+  matchmakingStatus,
   connectionError,
   onClearError,
   soundEnabled,
@@ -125,7 +127,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             {isConnecting ? (
               <>
                 <RefreshCw size={22} className="spin-icon" />
-                <span>CONNECTING TO ARENA...</span>
+                <span>
+                  {matchmakingStatus === 'searching'
+                    ? 'SEARCHING FOR MATCH...'
+                    : matchmakingStatus === 'found'
+                    ? 'MATCH FOUND — CONNECTING...'
+                    : 'CONNECTING TO ARENA...'}
+                </span>
               </>
             ) : (
               <>
