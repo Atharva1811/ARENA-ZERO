@@ -10,10 +10,12 @@ Players join instantly using just a callsign/nickname — **no registration, acc
 
 - **Instant Frictionless Combat**: Jump directly into public matchmaking or create private invite-only matches with 4-character codes (`AZ-XXXX`) or shareable URLs (`?room=AZ-XXXX`).
 - **First-Person Tactical Controls**: Full Pointer Lock API mouse-look, camera-relative WASD movement, thruster jump, sprint, and reload mechanics.
-- **Server-Authoritative Combat**: The Colyseus Node.js server validates ammunition, fire rate cooldowns, line-of-sight raycasting against arena obstacles, player health, kills, respawns, and match scoring. Client claims of damage or coordinates are never trusted.
+- **Accurate Remote Player Orientation & Aiming**: Remote players visually face their exact networked look direction across 360 degrees using a unified coordinate system and model root offset, with vertical aim pitch tracking and independent camera-relative movement.
+- **Server-Authoritative Real Combat**: The Colyseus Node.js server validates ammunition, fire rate cooldowns, 3D finite cylinder raycasts against both stationary and moving enemies (with 0.1m close-range tolerance), line-of-sight wall occlusion, atomic elimination, and match scoring. Client claims of damage are never trusted.
 - **Anti-Wallhack & Obstacle Occlusion**: Server-side line-of-sight raycasting checks prevent shots from passing through solid arena walls or cover blocks.
 - **Low-Poly Sci-Fi Arena**: Compact 28m combat ring featuring a central reactor core, 4 corner obelisk towers, raised central platform, tactical cover bunkers, and flank ramparts.
-- **Spawn Protection**: Freshly spawned or respawned players receive a temporary 2.5s invulnerability shield to mitigate spawn camping.
+- **Dynamic Spawn Shields**: Freshly spawned players receive a temporary bubble shield that immediately drops upon firing or receiving valid combat damage.
+- **Zero-Ghost Reconnection Lifecycle**: Clean 1-to-1 session lifecycle ensures disconnections and reconnects never leave stale ghost player models in the arena.
 - **Heads-Up Display & UI**: Dynamic crosshair with hitmarker flair (headshot crit indicator), armor integrity bar, pulse rifle ammo counter, kill feed banner, live match timer, and Tab-overlay scoreboard.
 - **Zero External Media Dependencies**: Procedural Web Audio API sound synthesis (pulse rifle shots, hitmarker dings, damage grunts, reloads) and Three.js low-poly geometric assets.
 
@@ -191,19 +193,126 @@ docker run -p 2567:2567 arena-zero-server
 
 ---
 
-## 🧪 Automated Verification Suite
+## 🎯 Combat & Coordinate Systems Architecture
 
-Run the full end-to-end automated verification script:
+### World Coordinate System & Facing Direction Convention
+
+ARENA ZERO strictly adheres to a standard Three.js right-handed coordinate system across client and server:
+- `+X` = East / Right
+- `+Y` = Up
+- `+Z` = South
+- `-Z` = North (Camera forward when `yaw = 0, pitch = 0`)
+- `-X` = West / Left
+
+#### Visual Offset on Remote Character Mesh
+* **Native Axis**: The procedural low-poly operator mesh is modeled with its visor, chest plate, and rifle facing `+Z`.
+* **Single Model Root Offset**: To align the mesh with the world facing direction (`-Z` at `yaw = 0`), an internal `visualRoot` group has `rotation.y = Math.PI` applied **exactly once**.
+* **Aim Direction Independence**: WASD movement vectors are computed relative to camera forward, while mouse aim controls `yaw` and `pitch`. Strafing or walking backward never causes arbitrary 180° facing-direction flips on remote screens.
+* **Vertical Aim Tracking**: Remote players smoothly pitch their head mesh and weapon arm to mirror vertical aim angles (`pitch`), giving realistic opponent telegraphing.
+* **Inward Spawn Orientations**: All 8 symmetrical arena spawn points are explicitly calibrated so newly spawned and respawned operators immediately face inward toward the central courtyard `(0, 0, 0)`.
+
+---
+
+### Server-Authoritative Combat Pipeline
+
+ARENA ZERO combat is strictly verified on the backend:
+```
+[Client Mouse Click]
+         │
+         ▼
+[Check Local Cooldown & Ammo]
+         │
+         ▼
+[Send Fire Message (origin, dir, targetHint?)]
+         │
+         ▼
+[Server Validation] ──► Checks shooter alive, rate-limit (140ms), ammo > 0, origin proximity
+         │
+         ▼
+[Authoritative 3D Finite Cylinder Raycast] ──► Evaluates all active enemies (radius: 0.70m - 0.80m, height: 1.8m)
+         │
+         ▼
+[Server-Side Line-of-Sight Occlusion] ──► Raycasts against all obstacles, bunkers & pillars (isLineOfSightClear)
+         │
+         ▼
+[Authoritative Damage Application] ──► Pops spawn shield, deducts HP (Body: 25 HP, Headshot: 45 HP)
+         │
+         ▼
+[State Mutation & Broadcast] ──► Colyseus schema syncs health, sends hit_confirm & damage_received events
+         │
+         ▼
+[Elimination (HP <= 0)] ──► isAlive = false, increments killer score (+100) & kills, broadcasts kill_feed
+         │
+         ▼
+[Authoritative Respawn] ──► After 3.0s delay, restores full 100 HP & 24 ammo at safest spawn point
+```
+
+- **Stationary & Active Hit Registration**: Firing at an enemy (even a stationary player at spawn) deals full authoritative damage and immediately pops their spawn bubble.
+- **Close-Range Hitscan Threshold**: The raycast minimum distance threshold is set to `0.1m`, guaranteeing responsive hits at point-blank range through maximum weapon range (`120m`).
+- **Dead Player Lockout**: Eliminated operators cannot fire weapons or receive duplicate death transitions while awaiting respawn.
+
+---
+
+## 🧪 Automated Verification & Regression Suites
+
+### 1. Colyseus Multi-Client Regression Suite (15 Automated Tests)
+
+Run the automated 15-test multiplayer test suite in `server/`:
+```bash
+cd server
+npm test
+```
+
+This headless test suite starts an independent Colyseus game server and connects real WebSocket clients to validate all edge cases:
+
+| Test ID | Test Name | Verified Behavior |
+|---|---|---|
+| **#1** | Single Player Join & Registration | Player appears exactly once in room state with 100 HP, 24 Ammo |
+| **#2** | Clean Leave & Model Cleanup | Session and visual model cleanly removed upon leaving |
+| **#3** | Abrupt WebSocket Disconnection | Drops connection without leaving lingering ghost entities |
+| **#4** | Reconnect Without Ghost Models | Prunes old stale sessions matching `clientToken`, keeps 1 active model |
+| **#5** | Rejoin Stress Cycle | 3 consecutive join/leave cycles complete with 0 lingering models |
+| **#6** | Cross-Room Isolation | Stale messages to previous rooms are ignored; room states strictly isolated |
+| **#7** | **Remote Player Orientation (0°, 90°, 180°, 270°)** | **Remote clients observe exact look angles without inversions or backward flips** |
+| **#8** | **Combat on Stationary Enemies (Close & Medium Range)** | **Stationary target hit at 6m and 1.5m; spawn shield drops and HP reduces** |
+| **#9** | **Missed Shot Safety** | Shots aimed away from targets apply 0 damage (target HP remains 100) |
+| **#10** | **Wall & Obstacle Occlusion** | Solid bunker wall blocks shot trajectory; 0 damage penetrates |
+| **#11** | **Atomic Elimination & Single Kill Event** | 4 shots reduce HP to 0; triggers exactly 1 death and 1 kill feed broadcast |
+| **#12** | **Dead Player Shooting Lockout** | Dead player firing packets safely rejected; enemy HP and ammo unchanged |
+| **#13** | **Respawn Restores Health & Ammo** | Respawn sets 100 HP and 24 Ammo while preserving match scores (kills/score) |
+| **#14** | **Dual-Client State Consistency** | Both clients observe identical synchronized target health |
+| **#15** | **Rapid Move & Fire Stress Test** | 20 rapid move & fire packets executed with 0 disconnects and 0 errors |
+
+```
+============================================================
+                 REGRESSION TEST SUITE REPORT                 
+============================================================
+[✓ PASS] #1 A player joins and appears exactly once
+[✓ PASS] #2 A player leaves and their model is removed
+[✓ PASS] #3 A player disconnects unexpectedly and their model is removed
+[✓ PASS] #4 The same browser reconnects and does not leave a ghost model
+[✓ PASS] #5 Two clients leave and rejoin repeatedly without duplicate models or listeners
+[✓ PASS] #6 Old room messages cannot recreate players after leaving the room
+[✓ PASS] #7 Rotate Player A through 0, 90, 180, and 270 degrees
+[✓ PASS] #8 Fire at stationary enemy at close and medium range
+[✓ PASS] #9 A missed shot does not reduce health
+[✓ PASS] #10 A wall blocks shots
+[✓ PASS] #11 Health reaching zero produces exactly one death and kill event
+[✓ PASS] #12 A dead player cannot shoot
+[✓ PASS] #13 Respawn restores health without resetting the match score
+[✓ PASS] #14 Both clients observe consistent health, death, and score updates
+[✓ PASS] #15 Repeated firing and movement does not cause disconnects or crashes
+------------------------------------------------------------
+TOTAL: 15 / 15 PASSED
+SERVER CRASH STATUS: HEALTHY & STABLE
+============================================================
+```
+
+### 2. End-to-End Simulation Script
+
+Run the multi-client simulation script:
 ```bash
 node scripts/verify_multiplayer.mjs
-```
-
-This script spins up two independent Colyseus clients in Node, connects them to the backend, tests room synchronization, moves them, waits for spawn shields to dissipate, executes hitscan combat, verifies server-validated damage deduction, and tests private room code creation and joining.
-
-```
-===============================================================
-       ALL ARENA ZERO MULTIPLAYER VERIFICATIONS PASSED!        
-===============================================================
 ```
 
 ---
@@ -213,5 +322,5 @@ This script spins up two independent Colyseus clients in Node, connects them to 
 - **No Client Damage Authority**: Clients send only origin and ray angle vectors; the server performs the authoritative raycast and calculates damage.
 - **Line-of-Sight Occlusion**: Raycasts are tested against solid arena bounding boxes (`isLineOfSightClear`). Shots cannot penetrate obstacles.
 - **Speed Limiting**: Client movement deltas are validated against `MAX_CLIENT_SPEED_TOLERANCE` on every tick, preventing speed hacking and coordinate tampering.
-- **Ammunition & Rate Cooldowns**: Mag sizes and 140ms fire rate cooldowns are enforced strictly on the server.
-- **Nickname Sanitization**: Callsigns are stripped of non-alphanumeric characters, clamped to 14 characters, and rendered safely.
+- **Ammunition & Rate Cooldowns**: Mag sizes (24 rounds) and 140ms fire rate cooldowns are enforced strictly on the server.
+- **Nickname Sanitization**: Callsigns are stripped of non-alphanumeric characters, clamped to 15 characters, and rendered safely.
