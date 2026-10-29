@@ -33,4 +33,8 @@ export const GAME_CONSTANTS = {
   MAX_NICKNAME_LENGTH: 15,
   MIN_NICKNAME_LENGTH: 2,
   MAX_CLIENT_SPEED_TOLERANCE: 14.5, // Max speed including lag spikes
+
+  // Private match constants
+  PRIVATE_ROOM_CODE_LENGTH: 4,
+  MAX_PRIVATE_ROOM_CODES: 10000,
 } as const;

@@ -28,7 +28,7 @@ export const App: React.FC = () => {
   // App & Connection state
   const [appMode, setAppMode] = useState<'MENU' | 'PLAYING'>('MENU');
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
-  const [matchmakingStatus, setMatchmakingStatus] = useState<'searching' | 'found' | 'connecting' | null>(null);
+  const [matchmakingStatus, setMatchmakingStatus] = useState<'searching' | 'found' | 'connecting' | 'creating_private' | 'joining_private' | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | undefined>(undefined);
 
@@ -74,6 +74,7 @@ export const App: React.FC = () => {
     killFeedTimersRef.current.forEach((timer) => clearTimeout(timer));
     killFeedTimersRef.current.clear();
     setKillFeed([]);
+    setRoomCode(undefined); // Authoritatively clear private room code upon match leave
     if (engineRef.current) {
       engineRef.current.dispose();
       engineRef.current = null;
@@ -224,12 +225,15 @@ export const App: React.FC = () => {
     engineRef.current = engine;
     setMySessionId(colyseus.mySessionId);
 
-    // Read room code from server state if present
+    // Read authoritative room code from server state if private match
     if (colyseus.room && colyseus.room.state) {
-      const stateRoomCode = colyseus.room.state.roomCode;
-      if (stateRoomCode) {
-        setRoomCode(stateRoomCode);
+      if (colyseus.room.state.isPrivate && colyseus.room.state.roomCode) {
+        setRoomCode(colyseus.room.state.roomCode);
+      } else {
+        setRoomCode(undefined);
       }
+    } else {
+      setRoomCode(undefined);
     }
 
     setAppMode('PLAYING');
@@ -249,9 +253,10 @@ export const App: React.FC = () => {
     setIsConnecting(true);
     setConnectionError(null);
     setMatchmakingStatus('searching');
+    setRoomCode(undefined); // Public matches never display a private code
     try {
-      const room = await colyseusRef.current.joinPublic(nickname);
-      setRoomCode(room.state?.roomCode || undefined);
+      await colyseusRef.current.joinPublic(nickname);
+      setRoomCode(undefined);
       setMatchmakingStatus(null);
       initEngine();
     } catch (err: any) {
@@ -264,10 +269,11 @@ export const App: React.FC = () => {
   const handleCreatePrivate = async (nickname: string) => {
     setIsConnecting(true);
     setConnectionError(null);
-    setMatchmakingStatus('connecting');
+    setMatchmakingStatus('creating_private');
     try {
       const room = await colyseusRef.current.createPrivate(nickname);
-      setRoomCode(room.state?.roomCode || undefined);
+      const authoritativeCode = room.state?.roomCode || undefined;
+      setRoomCode(authoritativeCode);
       setMatchmakingStatus(null);
       initEngine();
     } catch (err: any) {
@@ -280,10 +286,11 @@ export const App: React.FC = () => {
   const handleJoinPrivate = async (nickname: string, code: string) => {
     setIsConnecting(true);
     setConnectionError(null);
-    setMatchmakingStatus('connecting');
+    setMatchmakingStatus('joining_private');
     try {
       const room = await colyseusRef.current.joinPrivate(nickname, code);
-      setRoomCode(room.state?.roomCode || code);
+      const authoritativeCode = room.state?.roomCode || code;
+      setRoomCode(authoritativeCode);
       setMatchmakingStatus(null);
       initEngine();
     } catch (err: any) {

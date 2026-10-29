@@ -1305,6 +1305,12 @@ body, html, #root {
   color: #fff;
 }
 
+.share-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .share-btn {
   padding: 0.5rem 0.85rem;
   font-size: 0.78rem;
@@ -1318,6 +1324,67 @@ body, html, #root {
   border: 1px solid rgba(56, 189, 248, 0.1);
   border-radius: 10px;
   padding: 1rem;
+}
+
+.setting-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.setting-header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: var(--accent-cyan);
+}
+
+.settings-private-code-corner {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: rgba(8, 145, 178, 0.18);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+}
+
+.corner-code-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+
+.corner-code-label {
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--accent-cyan);
+}
+
+.corner-code-val {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #fff;
+}
+
+.btn-corner-copy {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.68rem;
+  height: 24px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .setting-header {

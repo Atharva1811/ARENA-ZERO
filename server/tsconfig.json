@@ -13,5 +13,5 @@
     "experimentalDecorators": true,
     "useDefineForClassFields": false
   },
-  "include": ["src/**/*", "../shared/**/*", "test-remote-shooting.ts", "test-suite.ts"]
+  "include": ["src/**/*", "../shared/**/*", "test-remote-shooting.ts", "test-suite.ts", "test-private-rooms.ts"]
 }

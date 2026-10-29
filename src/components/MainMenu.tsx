@@ -7,7 +7,7 @@ interface MainMenuProps {
   onJoinPrivate: (nickname: string, code: string) => void;
   serverUrl: string;
   isConnecting: boolean;
-  matchmakingStatus?: 'searching' | 'found' | 'connecting' | null;
+  matchmakingStatus?: 'searching' | 'found' | 'connecting' | 'creating_private' | 'joining_private' | null;
   connectionError: string | null;
   onClearError: () => void;
   soundEnabled: boolean;
@@ -31,9 +31,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   });
   
   // Read URL query parameter directly on initial render (?room=AZ-XXXX)
-  const initialRoomCode = () => new URLSearchParams(window.location.search).get('room')?.toUpperCase() || '';
+  const initialRoomCode = () => (new URLSearchParams(window.location.search).get('room') || '').replace(/\D/g, '').slice(0, 4);
   const [roomCode, setRoomCode] = useState(initialRoomCode);
-  const [showJoinCodeInput, setShowJoinCodeInput] = useState(() => !!initialRoomCode());
+  const [showJoinCodeInput, setShowJoinCodeInput] = useState(() => initialRoomCode().length === 4);
 
   const handleSaveNickname = (val: string) => {
     const clean = val.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 14);
@@ -55,9 +55,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
   const handleJoinByCode = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nickname.trim() || !roomCode.trim() || isConnecting) return;
+    const cleanCode = roomCode.trim();
+    if (!nickname.trim() || cleanCode.length !== 4 || isConnecting) return;
     onClearError();
-    onJoinPrivate(nickname.trim(), roomCode.trim());
+    onJoinPrivate(nickname.trim(), cleanCode);
   };
 
   return (
@@ -156,7 +157,11 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               disabled={!nickname.trim() || isConnecting}
             >
               <Zap size={18} />
-              <span>CREATE PRIVATE MATCH</span>
+              <span>
+                {isConnecting && matchmakingStatus === 'creating_private'
+                  ? 'CREATING PRIVATE MATCH...'
+                  : 'CREATE PRIVATE MATCH'}
+              </span>
             </button>
 
             <button
@@ -165,7 +170,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               disabled={isConnecting}
             >
               <Lock size={18} />
-              <span>JOIN WITH CODE</span>
+              <span>JOIN WITH 4-DIGIT CODE</span>
             </button>
           </div>
 
@@ -176,17 +181,20 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 type="text"
                 className="arena-input code-input"
                 value={roomCode}
-                maxLength={8}
-                placeholder="ROOM CODE (AZ-XXXX)"
-                onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={4}
+                placeholder="4-DIGIT CODE (e.g. 0821)"
+                onChange={(e) => setRoomCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                autoComplete="off"
                 disabled={isConnecting}
               />
               <button
                 type="submit"
                 className="btn-primary btn-join-code"
-                disabled={!roomCode.trim() || isConnecting}
+                disabled={roomCode.trim().length !== 4 || isConnecting}
               >
-                JOIN
+                {isConnecting && matchmakingStatus === 'joining_private' ? 'JOINING...' : 'JOIN'}
               </button>
             </form>
           )}

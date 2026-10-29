@@ -28,7 +28,7 @@ async function runRegressionTests() {
   });
 
   gameServer.define('arena_public', ArenaRoom).enableRealtimeListing();
-  gameServer.define('arena_private', ArenaRoom).filterBy(['roomCode']).enableRealtimeListing();
+  gameServer.define('arena_private', ArenaRoom);
   await gameServer.listen(port);
   console.log(`[Regression Test Server] Running on ws://localhost:${port}`);
 

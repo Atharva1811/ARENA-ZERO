@@ -102,6 +102,11 @@ export class ColyseusManager {
     return `${protocol}//${window.location.host}`;
   }
 
+  public getHttpServerUrl(): string {
+    const wsUrl = this.getServerUrl();
+    return wsUrl.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+  }
+
   public async joinPublic(nickname: string): Promise<Room> {
     const options: JoinRoomOptions = { nickname, clientToken: this.clientToken };
 
@@ -144,12 +149,41 @@ export class ColyseusManager {
   }
 
   public async joinPrivate(nickname: string, roomCode: string): Promise<Room> {
+    const cleanCode = roomCode.trim();
+    if (!/^\d{4}$/.test(cleanCode)) {
+      throw new Error('Private room code must contain exactly 4 numeric digits.');
+    }
+
+    const httpUrl = this.getHttpServerUrl();
+    let resolveData: { status: string; roomId: string; roomCode: string };
+
+    try {
+      const response = await fetch(`${httpUrl}/api/match/resolve-private`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomCode: cleanCode,
+          clientToken: this.clientToken,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || `Failed to resolve private room '${cleanCode}'.`);
+      }
+      resolveData = data;
+    } catch (err: any) {
+      throw new Error(err.message || `Unable to reach battle server for room '${cleanCode}'.`);
+    }
+
     const options: JoinRoomOptions = {
       nickname,
-      roomCode: roomCode.trim().toUpperCase(),
+      roomCode: cleanCode,
+      isPrivate: true,
       clientToken: this.clientToken,
     };
-    return this.connect(() => this.client.joinOrCreate('arena_private', options));
+
+    return this.connect(() => this.client.joinById(resolveData.roomId, options));
   }
 
   private async connect(connectFn: () => Promise<Room>): Promise<Room> {

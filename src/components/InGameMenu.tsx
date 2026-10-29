@@ -24,14 +24,23 @@ export const InGameMenu: React.FC<InGameMenuProps> = ({
   onResume,
   onLeave,
 }) => {
-  const [copied, setCopied] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const handleCopyCode = () => {
+    if (!roomCode) return;
+    navigator.clipboard.writeText(roomCode).then(() => {
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 2000);
+    });
+  };
 
   const handleCopyLink = () => {
     if (!roomCode) return;
     const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
     navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
     });
   };
 
@@ -47,25 +56,62 @@ export const InGameMenu: React.FC<InGameMenuProps> = ({
           <p className="ingame-sub">Match is active in real-time</p>
         </div>
 
-        {/* Room Share Section */}
+        {/* Room Share Section (Private Matches Only) */}
         {roomCode && (
           <div className="ingame-share-card">
             <div className="share-info">
-              <span className="share-label">ROOM CODE:</span>
+              <span className="share-label">PRIVATE MATCH CODE:</span>
               <span className="share-code">{roomCode}</span>
             </div>
-            <button className="btn-secondary share-btn" onClick={handleCopyLink}>
-              {copied ? <Check size={16} className="text-emerald" /> : <Copy size={16} />}
-              <span>{copied ? 'Copied!' : 'Copy Invite Link'}</span>
-            </button>
+            <div className="share-actions">
+              <button
+                type="button"
+                className="btn-secondary share-btn"
+                onClick={handleCopyCode}
+                title="Copy 4-digit room code"
+              >
+                {codeCopied ? <Check size={15} className="text-emerald" /> : <Copy size={15} />}
+                <span>{codeCopied ? 'Code Copied!' : 'Copy Code'}</span>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary share-btn"
+                onClick={handleCopyLink}
+                title="Copy full invite link"
+              >
+                {linkCopied ? <Check size={15} className="text-emerald" /> : <Copy size={15} />}
+                <span>{linkCopied ? 'Link Copied!' : 'Copy Link'}</span>
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Settings Adjustments */}
+        {/* Settings Adjustments / Tab */}
         <div className="ingame-settings-group">
-          <div className="setting-header">
-            <Sliders size={16} />
-            <span>AIM & CONTROLS</span>
+          <div className="setting-header-bar">
+            <div className="setting-header-title">
+              <Sliders size={16} />
+              <span>AIM & CONTROLS</span>
+            </div>
+
+            {/* Authoritative Private Match Code in Top-Right Corner of Settings */}
+            {roomCode && (
+              <div className="settings-private-code-corner" title="4-Digit Private Room Code">
+                <div className="corner-code-meta">
+                  <span className="corner-code-label">PRIVATE MATCH CODE</span>
+                  <span className="corner-code-val">{roomCode}</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary btn-corner-copy"
+                  onClick={handleCopyCode}
+                  title="Copy 4-digit code"
+                >
+                  {codeCopied ? <Check size={13} className="text-emerald" /> : <Copy size={13} />}
+                  <span>{codeCopied ? 'COPIED' : 'COPY'}</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Mouse Sensitivity */}

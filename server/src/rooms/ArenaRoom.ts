@@ -1,8 +1,9 @@
 import colyseus from 'colyseus';
 import type { Client } from 'colyseus';
-const { Room } = colyseus;
+const { Room, ServerError } = colyseus;
 import { ArenaState } from './schema/ArenaState.js';
 import { PlayerState } from './schema/PlayerState.js';
+import { PrivateRoomRegistry } from './PrivateRoomRegistry.js';
 import { GAME_CONSTANTS } from '../../../shared/constants.js';
 import {
   getLineOfSightObstacle,
@@ -149,7 +150,7 @@ export class ArenaRoom extends Room<ArenaState> {
 
   private updateRoomMetadata() {
     this.setMetadata({
-      roomCode: this.state.roomCode,
+      roomCode: this.state.isPrivate ? this.state.roomCode : '',
       isPrivate: this.state.isPrivate,
       playerCount: this.clients.length,
       maxClients: this.maxClients,
@@ -160,10 +161,17 @@ export class ArenaRoom extends Room<ArenaState> {
   onCreate(options: JoinRoomOptions) {
     this.setState(new ArenaState());
 
-    if (options.isPrivate || options.roomCode) {
+    const isPrivateMatch = this.roomName === 'arena_private' || Boolean(options?.isPrivate);
+    if (isPrivateMatch) {
       this.state.isPrivate = true;
-      this.state.roomCode = options.roomCode || this.generateRoomCode();
+      // Authoritatively allocate a unique 4-digit code (client cannot select arbitrary codes)
+      const allocatedCode = PrivateRoomRegistry.instance.allocate(this);
+      this.state.roomCode = allocatedCode;
       this.setPrivate(true); // Exclude private rooms from public matchmaking
+    } else {
+      this.state.isPrivate = false;
+      this.state.roomCode = '';
+      this.setPrivate(false);
     }
 
     this.updateRoomMetadata();
@@ -215,13 +223,48 @@ export class ArenaRoom extends Room<ArenaState> {
     }, 1000);
   }
 
-  private generateRoomCode(): string {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = 'AZ-';
-    for (let i = 0; i < 4; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+  public generateRoomCode(): string {
+    return PrivateRoomRegistry.instance.generateCode();
+  }
+
+  onAuth(client: Client, options: JoinRoomOptions): boolean {
+    if (this.state.isPrivate) {
+      // 1. Initial room creator is admitted automatically upon room creation
+      if (this.clients.length === 0) {
+        return true;
+      }
+
+      // 2. Room capacity check (enforce ROOM_CAPACITY = 8)
+      if (this.clients.length >= this.maxClients) {
+        throw new ServerError(409, `Private room is full (${this.maxClients}/${this.maxClients}).`);
+      }
+
+      // 3. Match status check
+      if (this.state.status === 'finished') {
+        throw new ServerError(410, 'Match in this private room has already ended.');
+      }
+
+      // 4. Authoritative 4-digit room code validation
+      const submittedCode = String(options?.roomCode || '').trim();
+      if (!submittedCode || submittedCode !== this.state.roomCode) {
+        const identifier = options?.clientToken || client.sessionId;
+        PrivateRoomRegistry.instance.recordFailedAttempt(identifier);
+        throw new ServerError(403, 'Invalid or missing private room code.');
+      }
+
+      const identifier = options?.clientToken || client.sessionId;
+      PrivateRoomRegistry.instance.resetFailedAttempts(identifier);
+    } else {
+      // Public room validation
+      if (this.clients.length >= this.maxClients) {
+        throw new ServerError(409, 'Public arena is full.');
+      }
+      if (this.state.status === 'finished') {
+        throw new ServerError(410, 'Match has already ended.');
+      }
     }
-    return code;
+
+    return true;
   }
 
   onJoin(client: Client, options: JoinRoomOptions) {
@@ -321,6 +364,9 @@ export class ArenaRoom extends Room<ArenaState> {
   onDispose() {
     if (this.matchTimerInterval) {
       clearInterval(this.matchTimerInterval);
+    }
+    if (this.state.isPrivate) {
+      PrivateRoomRegistry.instance.release(this.roomId);
     }
   }
 
