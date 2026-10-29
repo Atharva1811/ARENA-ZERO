@@ -4,7 +4,7 @@ const { Room, ServerError } = colyseus;
 import { ArenaState } from './schema/ArenaState.js';
 import { PlayerState } from './schema/PlayerState.js';
 import { PrivateRoomRegistry } from './PrivateRoomRegistry.js';
-import { GAME_CONSTANTS } from '../../../shared/constants.js';
+import { GAME_CONSTANTS, WEAPON_CONFIGS } from '../../../shared/constants.js';
 import {
   getLineOfSightObstacle,
   raycastArenaObstacles,
@@ -17,6 +17,8 @@ import type {
   FireWeaponPayload,
   KillFeedItem,
   WeaponTracerEvent,
+  WeaponId,
+  SwitchWeaponPayload,
 } from '../../../shared/types.js';
 
 // Predefined stylish player colors
@@ -226,6 +228,53 @@ export class ArenaRoom extends Room<ArenaState> {
       }
     });
 
+    this.onMessage('switch_weapon', (client, data: SwitchWeaponPayload) => {
+      try {
+        const player = this.state.players.get(client.sessionId);
+        if (!player || !player.isAlive) return;
+
+        const targetWeapon = data?.weaponId as WeaponId;
+        if (!WEAPON_CONFIGS[targetWeapon]) return;
+        if (player.currentWeapon === targetWeapon) return;
+
+        // Save current weapon's ammunition state
+        if (player.currentWeapon && player.weaponAmmo && player.weaponAmmo[player.currentWeapon]) {
+          player.weaponAmmo[player.currentWeapon].ammo = player.ammo;
+          player.weaponAmmo[player.currentWeapon].reserveAmmo = player.reserveAmmo;
+        }
+
+        // Cancel any active reload operation safely
+        player.isReloading = false;
+        player.isReloadingInternal = false;
+
+        // Switch to new weapon
+        player.currentWeapon = targetWeapon;
+        const config = WEAPON_CONFIGS[targetWeapon];
+
+        if (config.type === 'melee') {
+          player.ammo = 0;
+          player.reserveAmmo = 0;
+          player.fireMode = 'SINGLE';
+        } else {
+          const savedAmmo = player.weaponAmmo?.[targetWeapon] || {
+            ammo: config.magazineSize,
+            reserveAmmo: config.maxReserveAmmo,
+          };
+          player.ammo = savedAmmo.ammo;
+          player.reserveAmmo = savedAmmo.reserveAmmo;
+
+          if (targetWeapon === 'rifle') {
+            // Preserve rifle's fireMode (SINGLE or AUTO)
+          } else {
+            // Pistol and Sniper are semi-automatic (SINGLE)
+            player.fireMode = 'SINGLE';
+          }
+        }
+      } catch (err: any) {
+        console.error(`[ArenaRoom] Error in switch_weapon (client: ${client.sessionId}):`, err);
+      }
+    });
+
     // Match countdown timer (every 1 sec)
     this.matchTimerInterval = setInterval(() => {
       if (this.state.status === 'active') {
@@ -368,7 +417,7 @@ export class ArenaRoom extends Room<ArenaState> {
       this.broadcast('server_announcement', {
         message: `${player.nickname} left the match.`,
       });
-    } catch {}
+    } catch { }
 
     // Immediately remove from authoritative room state to guarantee no ghost models
     this.state.players.delete(client.sessionId);
@@ -507,13 +556,18 @@ export class ArenaRoom extends Room<ArenaState> {
 
     // 4. Rate-limit validation
     const now = Date.now();
-    if (now - shooter.lastShootTime < GAME_CONSTANTS.FIRE_RATE_MS) {
-      console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} shooterId=${client.sessionId} validation=REJECTED reason=Rate limit exceeded`);
+    const weaponId = (shooter.currentWeapon as WeaponId) || 'rifle';
+    const weaponConfig = WEAPON_CONFIGS[weaponId] || WEAPON_CONFIGS.rifle;
+    const isMelee = weaponConfig.type === 'melee';
+
+    const cooldownMs = weaponConfig.fireRateMs;
+    if (now - shooter.lastShootTime < cooldownMs) {
+      console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} shooterId=${client.sessionId} weapon=${weaponId} validation=REJECTED reason=Rate limit exceeded`);
       return;
     }
 
     // 5. Ammunition validation
-    if (shooter.ammo <= 0 || shooter.isReloadingInternal) {
+    if (!isMelee && (shooter.ammo <= 0 || shooter.isReloadingInternal)) {
       console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} shooterId=${client.sessionId} ammoRemaining=${shooter.ammo} validation=REJECTED reason=Out of ammo or reloading`);
       return;
     }
@@ -538,20 +592,142 @@ export class ArenaRoom extends Room<ArenaState> {
 
     // All validations passed: perform state changes
     shooter.lastShootTime = now;
-    shooter.ammo = Math.max(0, shooter.ammo - 1);
     shooter.isFiring = true;
     shooter.isShielded = false; // Firing removes spawn protection
 
-    // Automatic reload when magazine is emptied and reserve ammo is available
-    if (shooter.ammo === 0 && shooter.reserveAmmo > 0 && !shooter.isReloadingInternal) {
-      shooter.isReloading = true;
-      shooter.isReloadingInternal = true;
-      shooter.reloadExpiryTime = now + GAME_CONSTANTS.RELOAD_TIME_MS;
+    if (!isMelee) {
+      shooter.ammo = Math.max(0, shooter.ammo - 1);
+      if (shooter.weaponAmmo && shooter.weaponAmmo[weaponId]) {
+        shooter.weaponAmmo[weaponId].ammo = shooter.ammo;
+      }
+
+      // Automatic reload when magazine is emptied and reserve ammo is available
+      if (shooter.ammo === 0 && shooter.reserveAmmo > 0 && !shooter.isReloadingInternal) {
+        shooter.isReloading = true;
+        shooter.isReloadingInternal = true;
+        shooter.reloadExpiryTime = now + weaponConfig.reloadTimeMs;
+      }
     }
 
-    console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} shooterId=${client.sessionId} ammoRemaining=${shooter.ammo} validation=PASSED`);
+    console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} shooterId=${client.sessionId} weapon=${weaponId} ammoRemaining=${shooter.ammo} validation=PASSED`);
 
-    const maxRange = GAME_CONSTANTS.MAX_RANGE;
+    // --- MELEE COMBAT RESOLUTION ---
+    if (isMelee) {
+      const meleeRange = (weaponConfig.range || 2.0) + 0.45;
+      let meleeHitSessionId: string | null = null;
+      let bestDist = meleeRange;
+
+      this.state.players.forEach((target, targetSessionId) => {
+        if (targetSessionId === client.sessionId || !target.isAlive) return;
+
+        const dist = Math.hypot(target.x - shooter.x, target.z - shooter.z);
+        if (dist > meleeRange || dist > bestDist) return;
+
+        // Angle check: forward dot product
+        const toTargetX = (target.x - shooter.x) / (dist || 1);
+        const toTargetZ = (target.z - shooter.z) / (dist || 1);
+        const dot = toTargetX * nx + toTargetZ * nz;
+        if (dot < (weaponConfig.meleeAngleDot ?? 0.4)) return;
+
+        // Check line of sight
+        const blockedBy = getLineOfSightObstacle(
+          authoritativeOriginX,
+          authoritativeOriginY,
+          authoritativeOriginZ,
+          target.x,
+          target.y + 1.0,
+          target.z
+        );
+        if (!blockedBy) {
+          meleeHitSessionId = targetSessionId;
+          bestDist = dist;
+        }
+      });
+
+      const swipeEvent: WeaponTracerEvent = {
+        shotId,
+        shooterId: client.sessionId,
+        weaponId: 'knife',
+        isMelee: true,
+        startX: authoritativeOriginX,
+        startY: authoritativeOriginY,
+        startZ: authoritativeOriginZ,
+        endX: authoritativeOriginX + nx * 1.8,
+        endY: authoritativeOriginY + ny * 1.8,
+        endZ: authoritativeOriginZ + nz * 1.8,
+        hitTarget: !!meleeHitSessionId,
+        targetId: meleeHitSessionId || null,
+        timestamp: now,
+      };
+      this.broadcast('weapon_tracer', swipeEvent);
+
+      if (meleeHitSessionId) {
+        const bestTarget = this.state.players.get(meleeHitSessionId);
+        if (bestTarget && bestTarget.isAlive) {
+          bestTarget.isShielded = false;
+          bestTarget.lastDamageTime = now;
+          const damage = weaponConfig.damage;
+          bestTarget.health = Math.max(0, bestTarget.health - damage);
+
+          client.send('hit_confirm', {
+            shotId,
+            targetId: bestTarget.sessionId,
+            damage,
+            isKill: bestTarget.health <= 0,
+            headshot: false,
+            remainingHealth: bestTarget.health,
+            weaponId: 'knife',
+          });
+
+          const victimClient = this.clients.find((c) => c.sessionId === bestTarget.sessionId);
+          if (victimClient) {
+            victimClient.send('damage_received', {
+              shotId,
+              attackerId: client.sessionId,
+              damage,
+              currentHealth: bestTarget.health,
+              attackerX: shooter.x,
+              attackerZ: shooter.z,
+              weaponId: 'knife',
+            });
+          }
+
+          if (bestTarget.health <= 0 && bestTarget.isAlive) {
+            bestTarget.health = 0;
+            bestTarget.isAlive = false;
+            bestTarget.deaths++;
+            bestTarget.respawnTime = now + GAME_CONSTANTS.RESPAWN_TIME_MS;
+
+            shooter.kills++;
+            shooter.score += 100;
+
+            if (shooter.score > this.state.leaderScore) {
+              this.state.leaderScore = shooter.score;
+              this.state.leaderId = shooter.sessionId;
+            }
+
+            const killItem: KillFeedItem = {
+              id: `${now}-${Math.random()}`,
+              killerId: client.sessionId,
+              killerName: shooter.nickname,
+              victimId: bestTarget.sessionId,
+              victimName: bestTarget.nickname,
+              headshot: false,
+              timestamp: now,
+              weaponId: 'knife',
+            };
+            this.broadcast('kill_feed', killItem);
+
+            if (shooter.kills >= this.state.scoreLimit) {
+              this.endMatch(shooter);
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    const maxRange = weaponConfig.range || GAME_CONSTANTS.MAX_RANGE;
     let hitSomething = false;
     let hitX = authoritativeOriginX + nx * maxRange;
     let hitY = authoritativeOriginY + ny * maxRange;
@@ -651,6 +827,8 @@ export class ArenaRoom extends Room<ArenaState> {
       const tracerEvent: WeaponTracerEvent = {
         shotId,
         shooterId: client.sessionId,
+        weaponId,
+        isMelee: false,
         startX: authoritativeOriginX,
         startY: authoritativeOriginY,
         startZ: authoritativeOriginZ,
@@ -674,11 +852,11 @@ export class ArenaRoom extends Room<ArenaState> {
           bestTarget.isShielded = false; // Valid confirmed hit breaks spawn shield
           bestTarget.lastDamageTime = now; // Armour damage restarts 4-second regen delay
           const healthBefore = bestTarget.health;
-          const damage = isHeadshot ? GAME_CONSTANTS.HEADSHOT_DAMAGE : GAME_CONSTANTS.WEAPON_DAMAGE;
+          const damage = isHeadshot ? weaponConfig.headshotDamage : weaponConfig.damage;
           bestTarget.health = Math.max(0, bestTarget.health - damage);
           const healthAfter = bestTarget.health;
 
-          console.log(`[CombatDiag:7/11 SERVER_DAMAGE_APPLIED] shotId=${shotId} shooterId=${client.sessionId} targetId=${bestTarget.sessionId} damage=${damage} headshot=${isHeadshot} hpBefore=${healthBefore} hpAfter=${healthAfter}`);
+          console.log(`[CombatDiag:7/11 SERVER_DAMAGE_APPLIED] shotId=${shotId} shooterId=${client.sessionId} targetId=${bestTarget.sessionId} weapon=${weaponId} damage=${damage} headshot=${isHeadshot} hpBefore=${healthBefore} hpAfter=${healthAfter}`);
           console.log(`[CombatDiag:8/11 TARGET_HEALTH_UPDATED] shotId=${shotId} targetId=${bestTarget.sessionId} newHP=${bestTarget.health} isAlive=${bestTarget.isAlive}`);
 
           // Send hit confirmation to shooter
@@ -690,6 +868,7 @@ export class ArenaRoom extends Room<ArenaState> {
               isKill: bestTarget.health <= 0,
               headshot: isHeadshot,
               remainingHealth: bestTarget.health,
+              weaponId,
             });
           } catch (sendErr) {
             console.warn(`[ArenaRoom] Failed to send hit_confirm to shooter ${client.sessionId}:`, sendErr);
@@ -706,6 +885,7 @@ export class ArenaRoom extends Room<ArenaState> {
                 currentHealth: bestTarget.health,
                 attackerX: shooter.x,
                 attackerZ: shooter.z,
+                weaponId,
               });
             } catch (sendErr) {
               console.warn(`[ArenaRoom] Failed to send damage_received to victim ${bestTarget.sessionId}:`, sendErr);
@@ -741,6 +921,7 @@ export class ArenaRoom extends Room<ArenaState> {
                 victimName: bestTarget.nickname,
                 headshot: isHeadshot,
                 timestamp: now,
+                weaponId,
               };
               this.broadcast('kill_feed', killItem);
             } catch (broadcastErr) {
@@ -761,13 +942,21 @@ export class ArenaRoom extends Room<ArenaState> {
 
   private handlePlayerReload(client: Client) {
     const player = this.state.players.get(client.sessionId);
-    if (!player || !player.isAlive || player.isReloadingInternal || player.ammo >= GAME_CONSTANTS.MAGAZINE_SIZE || player.reserveAmmo <= 0) {
+    if (!player || !player.isAlive || player.isReloadingInternal) {
+      return;
+    }
+
+    const weaponId = (player.currentWeapon as WeaponId) || 'rifle';
+    const config = WEAPON_CONFIGS[weaponId] || WEAPON_CONFIGS.rifle;
+    if (config.type === 'melee') return;
+
+    if (player.ammo >= config.magazineSize || player.reserveAmmo <= 0) {
       return;
     }
 
     player.isReloading = true;
     player.isReloadingInternal = true;
-    player.reloadExpiryTime = Date.now() + GAME_CONSTANTS.RELOAD_TIME_MS;
+    player.reloadExpiryTime = Date.now() + config.reloadTimeMs;
   }
 
   private executePlayerRespawn(player: PlayerState) {
@@ -784,10 +973,18 @@ export class ArenaRoom extends Room<ArenaState> {
     player.lastMoveTime = 0; // Initialize so respawn movement is accepted smoothly
     player.health = GAME_CONSTANTS.MAX_HEALTH;
     player.maxHealth = GAME_CONSTANTS.MAX_HEALTH;
-    player.ammo = GAME_CONSTANTS.MAGAZINE_SIZE;
-    player.reserveAmmo = GAME_CONSTANTS.MAX_RESERVE_AMMO;
+    player.currentWeapon = 'rifle';
+    player.weaponAmmo = {
+      knife: { ammo: 0, reserveAmmo: 0 },
+      pistol: { ammo: WEAPON_CONFIGS.pistol.magazineSize, reserveAmmo: WEAPON_CONFIGS.pistol.maxReserveAmmo },
+      rifle: { ammo: WEAPON_CONFIGS.rifle.magazineSize, reserveAmmo: WEAPON_CONFIGS.rifle.maxReserveAmmo },
+      sniper: { ammo: WEAPON_CONFIGS.sniper.magazineSize, reserveAmmo: WEAPON_CONFIGS.sniper.maxReserveAmmo },
+    };
+    player.ammo = WEAPON_CONFIGS.rifle.magazineSize;
+    player.reserveAmmo = WEAPON_CONFIGS.rifle.maxReserveAmmo;
     player.stamina = GAME_CONSTANTS.MAX_STAMINA;
     player.maxStamina = GAME_CONSTANTS.MAX_STAMINA;
+    player.fireMode = 'AUTO';
     player.isSprinting = false;
     player.isAlive = true;
     player.isReloading = false;
@@ -898,10 +1095,16 @@ export class ArenaRoom extends Room<ArenaState> {
       }
 
       if (player.isReloadingInternal && now >= player.reloadExpiryTime) {
-        const needed = GAME_CONSTANTS.MAGAZINE_SIZE - player.ammo;
+        const weaponId = (player.currentWeapon as WeaponId) || 'rifle';
+        const config = WEAPON_CONFIGS[weaponId] || WEAPON_CONFIGS.rifle;
+        const needed = config.magazineSize - player.ammo;
         const transferred = Math.min(needed, player.reserveAmmo);
         player.ammo += transferred;
         player.reserveAmmo -= transferred;
+        if (player.weaponAmmo && player.weaponAmmo[weaponId]) {
+          player.weaponAmmo[weaponId].ammo = player.ammo;
+          player.weaponAmmo[weaponId].reserveAmmo = player.reserveAmmo;
+        }
         player.isReloading = false;
         player.isReloadingInternal = false;
       }

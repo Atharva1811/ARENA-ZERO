@@ -6,9 +6,9 @@ import { FPSAudio } from './audio/FPSAudio';
 import { EffectManager } from './effects/EffectManager';
 import { RemotePlayer } from './remote/RemotePlayer';
 import { ColyseusManager } from '../network/ColyseusManager';
-import { GAME_CONSTANTS } from '../../shared/constants';
+import { GAME_CONSTANTS, WEAPON_CONFIGS } from '../../shared/constants';
 import { raycastArenaObstacles } from '../../shared/arenaCollision';
-import type { KillFeedItem, MatchWinnerPayload } from '../../shared/types';
+import type { KillFeedItem, MatchWinnerPayload, WeaponId } from '../../shared/types';
 
 export interface PlayerScoreEntry {
   sessionId: string;
@@ -27,6 +27,8 @@ export interface EngineCallbacks {
   onHealthChange?: (health: number, maxHealth: number) => void;
   onStaminaChange?: (stamina: number, maxStamina: number) => void;
   onFireModeChange?: (fireMode: 'SINGLE' | 'AUTO') => void;
+  onWeaponChange?: (weaponId: WeaponId) => void;
+  onScopeChange?: (isScoped: boolean) => void;
   onCrosshairHit?: (headshot: boolean) => void;
   onDamageReceived?: () => void;
   onKillFeed?: (item: KillFeedItem) => void;
@@ -57,6 +59,8 @@ export class ArenaEngine {
   // Local state
   public isAlive: boolean = true;
   public isReloading: boolean = false;
+  public currentWeapon: WeaponId = 'rifle';
+  public isAiming: boolean = false;
   public ammo: number = GAME_CONSTANTS.MAGAZINE_SIZE;
   public maxAmmo: number = GAME_CONSTANTS.MAGAZINE_SIZE;
   public reserveAmmo: number = GAME_CONSTANTS.MAX_RESERVE_AMMO;
@@ -64,6 +68,13 @@ export class ArenaEngine {
   public maxHealth: number = GAME_CONSTANTS.MAX_HEALTH;
   public fireMode: 'SINGLE' | 'AUTO' = 'AUTO';
 
+  private weaponAmmoMap: Record<WeaponId, { ammo: number; reserveAmmo: number }> = {
+    knife: { ammo: 1, reserveAmmo: 0 },
+    pistol: { ammo: 12, reserveAmmo: 48 },
+    rifle: { ammo: 24, reserveAmmo: 72 },
+    sniper: { ammo: 5, reserveAmmo: 20 },
+  };
+  private reloadTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private isTriggerHeld: boolean = false;
   private autoFireIntervalId: ReturnType<typeof setInterval> | null = null;
   private singleFiredThisPress: boolean = false;
@@ -157,6 +168,8 @@ export class ArenaEngine {
     };
 
     // Initial HUD notifications
+    this.callbacks.onWeaponChange?.(this.currentWeapon);
+    this.callbacks.onScopeChange?.(false);
     this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
     this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
     this.callbacks.onHealthChange?.(this.health, this.maxHealth);
@@ -249,13 +262,16 @@ export class ArenaEngine {
             let startY = data.startY;
             let startZ = data.startZ;
 
+            const isMelee = !!data.isMelee || data.weaponId === 'knife';
+            const weaponId = (data.weaponId || 'rifle') as WeaponId;
+
             // 1. Look up shooter in active remote player roster
             const remoteShooter = this.remotePlayers.get(data.shooterId);
             if (remoteShooter) {
-              // Trigger visual muzzle flash & arm recoil animation
-              remoteShooter.triggerFire(data.endX, data.endY, data.endZ, !!data.hitTarget);
+              // Trigger visual muzzle flash & arm recoil animation or melee slash
+              remoteShooter.triggerFire(data.endX, data.endY, data.endZ, !!data.hitTarget, weaponId, isMelee);
 
-              // Query authoritative muzzle tip world position so the tracer connects from the rifle barrel
+              // Query authoritative muzzle tip world position so the tracer connects from the weapon barrel
               const muzzleWorldPos = remoteShooter.getMuzzleWorldPosition(new THREE.Vector3());
               if (
                 Number.isFinite(muzzleWorldPos.x) &&
@@ -268,21 +284,28 @@ export class ArenaEngine {
               }
             }
 
-            // 2. Spawn 3D laser tracer beam with impact sparks
-            this.effectManager.addTracer(
-              startX,
-              startY,
-              startZ,
-              data.endX,
-              data.endY,
-              data.endZ,
-              !!data.hitTarget
-            );
-
-            // 3. Play distance-attenuated gunshot sound relative to local camera position
             const localCamPos = this.fpsController.camera.position;
             const dist = Math.hypot(startX - localCamPos.x, startY - localCamPos.y, startZ - localCamPos.z);
-            this.fpsAudio.playRemoteGunshot(dist);
+
+            if (isMelee) {
+              if (dist < 18) {
+                this.fpsAudio.playKnifeSlash();
+              }
+            } else {
+              // 2. Spawn 3D laser tracer beam with impact sparks
+              this.effectManager.addTracer(
+                startX,
+                startY,
+                startZ,
+                data.endX,
+                data.endY,
+                data.endZ,
+                !!data.hitTarget
+              );
+
+              // 3. Play distance-attenuated gunshot sound relative to local camera position
+              this.fpsAudio.playRemoteGunshot(dist, weaponId);
+            }
           } catch (e) {
             console.warn('[ArenaEngine] Failed to add remote tracer:', e);
           }
@@ -302,15 +325,31 @@ export class ArenaEngine {
       if (this.isDisposed) return;
       console.log(`[CombatDiag:10/11 TARGET_DEATH_AND_RESPAWN] Respawn confirmed for local player (${this.colyseus.mySessionId}) at (${data.x.toFixed(1)}, ${data.z.toFixed(1)})`);
       this.isAlive = true;
+      this.cancelReload();
+      this.setAiming(false);
+      this.fpsController.resetRecoil();
       this.health = this.maxHealth;
-      this.ammo = this.maxAmmo;
-      this.isReloading = false;
+
+      this.weaponAmmoMap = {
+        knife: { ammo: 1, reserveAmmo: 0 },
+        pistol: { ammo: 12, reserveAmmo: 48 },
+        rifle: { ammo: 24, reserveAmmo: 72 },
+        sniper: { ammo: 5, reserveAmmo: 20 },
+      };
+      this.currentWeapon = 'rifle';
+      this.weaponModel.setWeapon('rifle');
+      this.ammo = this.weaponAmmoMap.rifle.ammo;
+      this.maxAmmo = WEAPON_CONFIGS.rifle.magazineSize;
+      this.reserveAmmo = this.weaponAmmoMap.rifle.reserveAmmo;
 
       this.fpsController.teleport(data.x, data.y, data.z, data.yaw);
       this.fpsAudio.playRespawn();
 
+      this.callbacks.onWeaponChange?.('rifle');
+      this.callbacks.onScopeChange?.(false);
       this.callbacks.onHealthChange?.(this.health, this.maxHealth);
       this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+      this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
       this.callbacks.onPlayerRespawn?.();
     };
 
@@ -376,26 +415,65 @@ export class ArenaEngine {
           console.log(`[CombatDiag:11/11 SHOOTER_SCORE_UPDATED] Local shooterId=${sessionId} kills=${player.kills} score=${player.score}`);
         }
 
+        // Authoritative weapon and ammunition state sync
+        if (
+          typeof player.currentWeapon === 'string' &&
+          player.currentWeapon !== this.currentWeapon &&
+          WEAPON_CONFIGS[player.currentWeapon as WeaponId]
+        ) {
+          this.currentWeapon = player.currentWeapon as WeaponId;
+          this.weaponModel.setWeapon(this.currentWeapon);
+          this.maxAmmo = WEAPON_CONFIGS[this.currentWeapon].magazineSize;
+          this.callbacks.onWeaponChange?.(this.currentWeapon);
+        }
+
+        if (typeof player.ammo === 'number' && !this.isReloading && player.ammo !== this.ammo) {
+          this.ammo = player.ammo;
+          this.weaponAmmoMap[this.currentWeapon].ammo = this.ammo;
+          this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+        }
+
+        if (typeof player.reserveAmmo === 'number' && player.reserveAmmo !== this.reserveAmmo) {
+          this.reserveAmmo = player.reserveAmmo;
+          this.weaponAmmoMap[this.currentWeapon].reserveAmmo = this.reserveAmmo;
+          this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
+        }
+
         if (typeof player.isAlive === 'boolean' && player.isAlive !== this.isAlive) {
           this.isAlive = player.isAlive;
           if (this.isAlive) {
             // Player respawned via server state sync
+            this.cancelReload();
+            this.setAiming(false);
+            this.fpsController.resetRecoil();
             this.health = player.health;
-            this.ammo = player.ammo;
-            this.reserveAmmo = typeof player.reserveAmmo === 'number' ? player.reserveAmmo : GAME_CONSTANTS.MAX_RESERVE_AMMO;
-            this.isReloading = false;
+            if (player.currentWeapon && WEAPON_CONFIGS[player.currentWeapon as WeaponId]) {
+              this.currentWeapon = player.currentWeapon as WeaponId;
+              this.weaponModel.setWeapon(this.currentWeapon);
+            }
+            this.ammo = typeof player.ammo === 'number' ? player.ammo : WEAPON_CONFIGS[this.currentWeapon].magazineSize;
+            this.maxAmmo = WEAPON_CONFIGS[this.currentWeapon].magazineSize;
+            this.reserveAmmo =
+              typeof player.reserveAmmo === 'number'
+                ? player.reserveAmmo
+                : WEAPON_CONFIGS[this.currentWeapon].maxReserveAmmo;
+            this.weaponAmmoMap[this.currentWeapon] = { ammo: this.ammo, reserveAmmo: this.reserveAmmo };
             this.isTriggerHeld = false;
             this.singleFiredThisPress = false;
             this.stopAutoFire();
+            this.callbacks.onWeaponChange?.(this.currentWeapon);
+            this.callbacks.onScopeChange?.(false);
             this.callbacks.onHealthChange?.(this.health, this.maxHealth);
             this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
             this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
             this.callbacks.onPlayerRespawn?.();
           } else {
+            this.cancelReload();
+            this.setAiming(false);
+            this.fpsController.resetRecoil();
             this.stopAutoFire();
             this.isTriggerHeld = false;
             this.singleFiredThisPress = false;
-            this.isReloading = false;
             this.fpsController.exitPointerLock();
             this.callbacks.onPlayerDeath?.('Opponent');
           }
@@ -435,11 +513,49 @@ export class ArenaEngine {
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
+    window.addEventListener('wheel', this.onWheel, { passive: false });
+    window.addEventListener('contextmenu', this.onContextMenu);
     window.addEventListener('blur', this.onBlur);
   }
 
+  private onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+  };
+
+  private onWheel = (e: WheelEvent) => {
+    if (this.isDisposed || !this.isAlive || !this.fpsController.isPointerLocked) return;
+    e.preventDefault();
+    const WEAPON_ORDER: WeaponId[] = ['knife', 'pistol', 'rifle', 'sniper'];
+    const currentIndex = WEAPON_ORDER.indexOf(this.currentWeapon);
+    if (e.deltaY > 0) {
+      const nextIndex = (currentIndex + 1) % WEAPON_ORDER.length;
+      this.switchWeapon(WEAPON_ORDER[nextIndex]);
+    } else if (e.deltaY < 0) {
+      const prevIndex = (currentIndex - 1 + WEAPON_ORDER.length) % WEAPON_ORDER.length;
+      this.switchWeapon(WEAPON_ORDER[prevIndex]);
+    }
+  };
+
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.isDisposed) return;
+
+    // Number keys 1, 2, 3, 4 for weapon selection
+    if (e.code === 'Digit1' || e.code === 'Numpad1') {
+      this.switchWeapon('knife');
+      return;
+    }
+    if (e.code === 'Digit2' || e.code === 'Numpad2') {
+      this.switchWeapon('pistol');
+      return;
+    }
+    if (e.code === 'Digit3' || e.code === 'Numpad3') {
+      this.switchWeapon('rifle');
+      return;
+    }
+    if (e.code === 'Digit4' || e.code === 'Numpad4') {
+      this.switchWeapon('sniper');
+      return;
+    }
 
     if (e.code === 'KeyB') {
       this.toggleFireMode();
@@ -459,6 +575,71 @@ export class ArenaEngine {
     this.fpsController.handleKeyUp(e.code);
   };
 
+  public switchWeapon(weaponId: WeaponId) {
+    if (this.isDisposed || !this.isAlive || this.currentWeapon === weaponId) return;
+
+    // Cache current weapon ammo
+    this.weaponAmmoMap[this.currentWeapon] = {
+      ammo: this.ammo,
+      reserveAmmo: this.reserveAmmo,
+    };
+
+    // Cancel active reload & auto-fire
+    this.cancelReload();
+    this.stopAutoFire();
+    this.isTriggerHeld = false;
+    this.singleFiredThisPress = false;
+    this.setAiming(false);
+
+    this.currentWeapon = weaponId;
+    this.weaponModel.setWeapon(weaponId);
+
+    const cfg = WEAPON_CONFIGS[weaponId];
+    const cached = this.weaponAmmoMap[weaponId];
+    this.ammo = cached ? cached.ammo : cfg.magazineSize;
+    this.maxAmmo = cfg.magazineSize;
+    this.reserveAmmo = cached ? cached.reserveAmmo : cfg.maxReserveAmmo;
+
+    this.callbacks.onWeaponChange?.(weaponId);
+    this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+    this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
+
+    this.fpsAudio.playSwitchWeapon();
+    this.colyseus.sendSwitchWeapon(weaponId);
+  }
+
+  public setAiming(aim: boolean) {
+    if (this.isDisposed || !this.isAlive) {
+      aim = false;
+    }
+    // Knife cannot aim down sights
+    if (this.currentWeapon === 'knife') {
+      aim = false;
+    }
+    // If sprinting, cancel aiming
+    if (aim && this.fpsController.isSprinting) {
+      aim = false;
+    }
+
+    if (this.isAiming === aim) return;
+    this.isAiming = aim;
+
+    const isSniperScoped = aim && this.currentWeapon === 'sniper';
+    const targetFov = !aim ? 75 : this.currentWeapon === 'sniper' ? 28 : this.currentWeapon === 'pistol' ? 60 : 50;
+
+    this.fpsController.setAiming(aim, targetFov);
+    this.weaponModel.setAiming(aim, isSniperScoped);
+    this.callbacks.onScopeChange?.(isSniperScoped);
+
+    if (this.currentWeapon === 'sniper') {
+      if (aim) {
+        this.fpsAudio.playScopeIn();
+      } else {
+        this.fpsAudio.playScopeOut();
+      }
+    }
+  }
+
   public toggleFireMode() {
     this.fireMode = this.fireMode === 'AUTO' ? 'SINGLE' : 'AUTO';
     if (this.fireMode === 'SINGLE') {
@@ -470,8 +651,16 @@ export class ArenaEngine {
 
   private startAutoFire() {
     this.stopAutoFire();
+    if (this.currentWeapon !== 'rifle' || this.fireMode !== 'AUTO') return;
+
     this.autoFireIntervalId = setInterval(() => {
-      if (this.isDisposed || !this.isAlive || !this.isTriggerHeld || this.fireMode !== 'AUTO') {
+      if (
+        this.isDisposed ||
+        !this.isAlive ||
+        !this.isTriggerHeld ||
+        this.currentWeapon !== 'rifle' ||
+        this.fireMode !== 'AUTO'
+      ) {
         this.stopAutoFire();
         return;
       }
@@ -480,7 +669,7 @@ export class ArenaEngine {
         return;
       }
       this.fireWeapon();
-    }, GAME_CONSTANTS.FIRE_RATE_MS);
+    }, WEAPON_CONFIGS.rifle.fireRateMs);
   }
 
   private stopAutoFire() {
@@ -501,15 +690,20 @@ export class ArenaEngine {
       }
 
       this.isTriggerHeld = true;
-      if (this.fireMode === 'SINGLE') {
+      if (this.currentWeapon === 'rifle' && this.fireMode === 'AUTO') {
+        this.fireWeapon();
+        this.startAutoFire();
+      } else {
+        // Semi-automatic for knife, pistol, sniper, or rifle SINGLE
         if (!this.singleFiredThisPress) {
           this.singleFiredThisPress = true;
           this.fireWeapon();
         }
-      } else {
-        // AUTO mode
-        this.fireWeapon();
-        this.startAutoFire();
+      }
+    } else if (e.button === 2) {
+      // Right click ADS / Scope
+      if (this.fpsController.isPointerLocked) {
+        this.setAiming(true);
       }
     }
   };
@@ -519,6 +713,8 @@ export class ArenaEngine {
       this.isTriggerHeld = false;
       this.singleFiredThisPress = false;
       this.stopAutoFire();
+    } else if (e.button === 2) {
+      this.setAiming(false);
     }
   };
 
@@ -526,14 +722,71 @@ export class ArenaEngine {
     this.isTriggerHeld = false;
     this.singleFiredThisPress = false;
     this.stopAutoFire();
+    this.setAiming(false);
   };
 
   public fireWeapon() {
     if (!this.isAlive || this.isReloading) return;
 
     const now = performance.now();
-    if (now - this.lastFireTime < GAME_CONSTANTS.FIRE_RATE_MS) return;
+    const config = WEAPON_CONFIGS[this.currentWeapon];
+    if (now - this.lastFireTime < config.fireRateMs) return;
 
+    const shotId = `shot_${this.colyseus.mySessionId || 'local'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    // 1. Melee attack (Knife)
+    if (this.currentWeapon === 'knife') {
+      this.lastFireTime = now;
+      this.fpsAudio.playKnifeSlash();
+      this.weaponModel.triggerMeleeSlash();
+
+      const { origin, direction } = this.fpsController.getForwardRay();
+      const eyePos = origin;
+      const fwd = direction.clone().normalize();
+
+      // Check melee target within 2.0m and forward angle cone (~66 deg, dot >= 0.4)
+      let hitSessionId: string | undefined = undefined;
+      let minDistance = 2.0;
+
+      this.remotePlayers.forEach((remote, sid) => {
+        if (!remote.isAlive) return;
+        const targetPos = new THREE.Vector3(remote.group.position.x, remote.group.position.y + 1.0, remote.group.position.z);
+        const toTarget = targetPos.clone().sub(eyePos);
+        const dist = toTarget.length();
+        if (dist <= 2.0 && dist < minDistance) {
+          const dirToTarget = toTarget.clone().normalize();
+          const dot = fwd.dot(dirToTarget);
+          if (dot >= 0.4) {
+            // Validate line of sight against arena obstacles
+            const obsHit = raycastArenaObstacles(eyePos.x, eyePos.y, eyePos.z, dirToTarget.x, dirToTarget.y, dirToTarget.z, dist);
+            if (!obsHit.hit || obsHit.dist >= dist) {
+              minDistance = dist;
+              hitSessionId = sid;
+            }
+          }
+        }
+      });
+
+      if (hitSessionId) {
+        this.fpsAudio.playKnifeHit();
+      }
+
+      this.colyseus.sendFire({
+        shotId,
+        originX: origin.x,
+        originY: origin.y,
+        originZ: origin.z,
+        dirX: direction.x,
+        dirY: direction.y,
+        dirZ: direction.z,
+        targetSessionId: hitSessionId,
+        weaponId: 'knife',
+        isMelee: true,
+      });
+      return;
+    }
+
+    // 2. Firearms (Pistol, Rifle, Sniper)
     if (this.ammo <= 0) {
       this.fpsAudio.playEmptyClick();
       if (this.reserveAmmo > 0) {
@@ -542,12 +795,11 @@ export class ArenaEngine {
       return;
     }
 
-    const shotId = `shot_${this.colyseus.mySessionId || 'local'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    console.log(`[CombatDiag:1/11 LOCAL_FIRE_INPUT] shotId=${shotId} shooterId=${this.colyseus.mySessionId} ammo=${this.ammo} isAlive=${this.isAlive}`);
-
     this.lastFireTime = now;
     this.ammo--;
+    this.weaponAmmoMap[this.currentWeapon].ammo = this.ammo;
     this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+
     if (this.ammo === 0) {
       this.stopAutoFire();
       if (this.reserveAmmo > 0) {
@@ -555,13 +807,13 @@ export class ArenaEngine {
       }
     }
 
-    // Audio and weapon viewmodel recoil
-    this.fpsAudio.playShoot();
-    this.weaponModel.triggerRecoil();
+    // Audio & Viewmodel / Camera Recoil
+    this.fpsAudio.playShoot(this.currentWeapon);
+    this.weaponModel.triggerRecoil(this.currentWeapon);
+    this.fpsController.applyRecoil(config.recoil);
 
     this.fpsController.camera.updateMatrixWorld(true);
     const muzzlePos = this.weaponModel.getMuzzleWorldPosition(new THREE.Vector3());
-    console.log(`[CombatDiag:2/11 LOCAL_MUZZLE_EFFECT] shotId=${shotId} muzzleX=${muzzlePos.x.toFixed(2)} muzzleY=${muzzlePos.y.toFixed(2)} muzzleZ=${muzzlePos.z.toFixed(2)}`);
 
     // Calculate forward ray
     const { origin, direction } = this.fpsController.getForwardRay();
@@ -593,7 +845,6 @@ export class ArenaEngine {
       hitDistance = hit.distance;
       hitPoint = hit.point;
 
-      // Find top group or hitbox mapping
       let cur: THREE.Object3D | null = hit.object;
       while (cur && !meshToSessionMap.has(cur)) {
         cur = cur.parent;
@@ -651,8 +902,6 @@ export class ArenaEngine {
       console.warn('[ArenaEngine] Failed to add local tracer:', e);
     }
 
-    console.log(`[CombatDiag:3/11 FIRE_REQUEST_SENT] shotId=${shotId} shooterId=${this.colyseus.mySessionId} origin=(${origin.x.toFixed(2)}, ${origin.y.toFixed(2)}, ${origin.z.toFixed(2)}) dir=(${direction.x.toFixed(2)}, ${direction.y.toFixed(2)}, ${direction.z.toFixed(2)}) targetClaimed=${hitSessionId || 'none'} hitDist=${hitDistance.toFixed(2)}m`);
-
     // Send fire message to server for authoritative validation
     this.colyseus.sendFire({
       shotId,
@@ -663,35 +912,56 @@ export class ArenaEngine {
       dirY: direction.y,
       dirZ: direction.z,
       targetSessionId: hitSessionId,
+      weaponId: this.currentWeapon,
+      isMelee: false,
     });
   }
 
+  public cancelReload() {
+    if (this.reloadTimeoutId !== null) {
+      clearTimeout(this.reloadTimeoutId);
+      this.reloadTimeoutId = null;
+    }
+    this.isReloading = false;
+  }
+
   public reloadWeapon() {
+    if (this.currentWeapon === 'knife') return; // Knife has no ammo/reload
     if (this.ammo >= this.maxAmmo || this.isReloading || !this.isAlive || this.reserveAmmo <= 0) return;
 
     this.isReloading = true;
     this.stopAutoFire();
+    this.setAiming(false);
     this.fpsAudio.playReload();
-    this.weaponModel.startReload(GAME_CONSTANTS.RELOAD_TIME_MS / 1000);
+
+    const reloadTimeMs = WEAPON_CONFIGS[this.currentWeapon].reloadTimeMs;
+    this.weaponModel.startReload(reloadTimeMs / 1000);
     this.colyseus.sendReload();
 
-    setTimeout(() => {
-      if (!this.isDisposed && this.isAlive) {
+    if (this.reloadTimeoutId !== null) {
+      clearTimeout(this.reloadTimeoutId);
+    }
+
+    this.reloadTimeoutId = setTimeout(() => {
+      this.reloadTimeoutId = null;
+      if (!this.isDisposed && this.isAlive && this.isReloading) {
         const needed = this.maxAmmo - this.ammo;
         const toLoad = Math.min(needed, this.reserveAmmo);
         this.ammo += toLoad;
         this.reserveAmmo -= toLoad;
+        this.weaponAmmoMap[this.currentWeapon].ammo = this.ammo;
+        this.weaponAmmoMap[this.currentWeapon].reserveAmmo = this.reserveAmmo;
         this.isReloading = false;
         this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
         this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
 
         // In AUTO mode: if trigger is still held when reload completes, resume firing immediately
-        if (this.isTriggerHeld && this.fireMode === 'AUTO' && this.ammo > 0) {
+        if (this.isTriggerHeld && this.currentWeapon === 'rifle' && this.fireMode === 'AUTO' && this.ammo > 0) {
           this.fireWeapon();
           this.startAutoFire();
         }
       }
-    }, GAME_CONSTANTS.RELOAD_TIME_MS);
+    }, reloadTimeMs);
   }
 
   public requestRespawn() {
@@ -715,6 +985,11 @@ export class ArenaEngine {
 
     const dt = this.clock.getDelta();
     const elapsedTime = this.clock.getElapsedTime();
+
+    // If player starts sprinting while aiming, cancel aiming smoothly
+    if (this.isAiming && this.fpsController.isSprinting) {
+      this.setAiming(false);
+    }
 
     // Update FPS Controller
     this.fpsController.update(dt, this.isAlive);
@@ -762,6 +1037,8 @@ export class ArenaEngine {
     }
 
     this.stopAutoFire();
+    this.cancelReload();
+    this.setAiming(false);
     this.isTriggerHeld = false;
     this.singleFiredThisPress = false;
 
@@ -770,6 +1047,8 @@ export class ArenaEngine {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('wheel', this.onWheel);
+    window.removeEventListener('contextmenu', this.onContextMenu);
     window.removeEventListener('blur', this.onBlur);
 
     this.fpsController.dispose();

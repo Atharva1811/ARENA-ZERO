@@ -10,6 +10,7 @@ import type {
   WeaponTracerEvent,
   MatchWinnerPayload,
   SpawnConfirmedPayload,
+  WeaponId,
 } from '../../shared/types';
 
 export class ColyseusManager {
@@ -393,6 +394,16 @@ export class ColyseusManager {
         this.room.send('toggle_fire_mode', { mode });
       } catch (e) {
         console.warn('[ColyseusManager] Error sending toggle_fire_mode:', e);
+      }
+    }
+  }
+
+  public sendSwitchWeapon(weaponId: WeaponId) {
+    if (this.room && this.isConnected) {
+      try {
+        this.room.send('switch_weapon', { weaponId });
+      } catch (e) {
+        console.warn('[ColyseusManager] Error sending switch_weapon:', e);
       }
     }
   }

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { WeaponId } from '../../../shared/types';
 
 export class RemotePlayer {
   public id: string;
@@ -13,7 +14,11 @@ export class RemotePlayer {
   private visorMesh!: THREE.Mesh;
   private leftArmPivot!: THREE.Group;
   private rightArmPivot!: THREE.Group;
+  public currentWeapon: WeaponId = 'rifle';
+  private knifeGroup!: THREE.Group;
+  private pistolGroup!: THREE.Group;
   private rifleGroup!: THREE.Group;
+  private sniperGroup!: THREE.Group;
   private muzzleSocket!: THREE.Group;
   private muzzleFlashCore!: THREE.Mesh;
   private muzzleFlashCross!: THREE.Mesh;
@@ -53,6 +58,7 @@ export class RemotePlayer {
   private muzzleFlashFrames: number = 0;
   private armRecoil: number = 0;
   private weaponKickZ: number = 0;
+  private slashTimer: number = 0;
 
   constructor(id: string, nickname: string, colorHex: string, initialPos: { x: number; y: number; z: number; yaw: number }) {
     this.id = id;
@@ -146,14 +152,65 @@ export class RemotePlayer {
     this.leftArmPivot.add(leftArmMesh);
     this.visualRoot.add(this.leftArmPivot);
 
-    // 4. Right Arm Pivot (holding rifle)
+    // 4. Right Arm Pivot (holding weapon)
     this.rightArmPivot = new THREE.Group();
     this.rightArmPivot.position.set(0.38, 1.3, 0);
     const rightArmMesh = new THREE.Mesh(armGeo, armorDarkMat);
     rightArmMesh.position.y = -0.28;
     this.rightArmPivot.add(rightArmMesh);
 
-    // --- Stylized Tactical Assault Carbine attached to right arm ---
+    // --- 1. Combat Knife ---
+    this.knifeGroup = new THREE.Group();
+    const knifeHandle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.045, 0.16), polymerMat);
+    knifeHandle.position.set(0, 0, 0.06);
+    this.knifeGroup.add(knifeHandle);
+
+    const knifeGuard = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.08, 0.02), metallicMat);
+    knifeGuard.position.set(0, 0, 0.15);
+    this.knifeGroup.add(knifeGuard);
+
+    const knifeBlade = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.06, 0.28), metallicMat);
+    knifeBlade.position.set(0, 0.01, 0.30);
+    this.knifeGroup.add(knifeBlade);
+
+    const knifeEdge = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.035, 0.26), visorMat);
+    knifeEdge.position.set(0, 0.035, 0.30);
+    this.knifeGroup.add(knifeEdge);
+
+    this.knifeGroup.position.set(0, -0.45, 0.18);
+    this.knifeGroup.visible = false;
+    this.rightArmPivot.add(this.knifeGroup);
+
+    // --- 2. Semi-Auto Pistol ---
+    this.pistolGroup = new THREE.Group();
+    const pistolFrame = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.22), polymerMat);
+    pistolFrame.position.set(0, 0.01, 0.08);
+    this.pistolGroup.add(pistolFrame);
+
+    const pistolGrip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.14, 0.07), polymerMat);
+    pistolGrip.position.set(0, -0.06, 0.02);
+    pistolGrip.rotation.x = -0.18;
+    this.pistolGroup.add(pistolGrip);
+
+    const pistolSlide = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.055, 0.24), armorDarkMat);
+    pistolSlide.position.set(0, 0.055, 0.08);
+    this.pistolGroup.add(pistolSlide);
+
+    const pistolBarrelGeo = new THREE.CylinderGeometry(0.016, 0.016, 0.08, 8);
+    pistolBarrelGeo.rotateX(Math.PI / 2);
+    const pistolBarrel = new THREE.Mesh(pistolBarrelGeo, metallicMat);
+    pistolBarrel.position.set(0, 0.055, 0.22);
+    this.pistolGroup.add(pistolBarrel);
+
+    const pistolSight = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.02, 0.02), visorMat);
+    pistolSight.position.set(0, 0.09, 0.18);
+    this.pistolGroup.add(pistolSight);
+
+    this.pistolGroup.position.set(0, -0.45, 0.18);
+    this.pistolGroup.visible = false;
+    this.rightArmPivot.add(this.pistolGroup);
+
+    // --- 3. Stylized Tactical Assault Carbine ---
     this.rifleGroup = new THREE.Group();
 
     // Receiver chassis
@@ -266,10 +323,55 @@ export class RemotePlayer {
     sightReticle.position.set(0, 0.11, 0.02);
     this.rifleGroup.add(sightReticle);
 
-    // Muzzle Socket & Multi-Layer Remote Flash
+    // Mount rifle to right arm
+    this.rifleGroup.position.set(0, -0.45, 0.2);
+    this.rifleGroup.visible = true;
+    this.rightArmPivot.add(this.rifleGroup);
+
+    // --- 4. Precision Heavy Sniper ---
+    this.sniperGroup = new THREE.Group();
+    const sniperChassis = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 0.46), armorDarkMat);
+    sniperChassis.position.set(0, 0.02, 0.12);
+    this.sniperGroup.add(sniperChassis);
+
+    const sniperStock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, 0.26), polymerMat);
+    sniperStock.position.set(0, -0.02, -0.22);
+    this.sniperGroup.add(sniperStock);
+
+    const sniperBarrelGeo = new THREE.CylinderGeometry(0.022, 0.024, 0.65, 8);
+    sniperBarrelGeo.rotateX(Math.PI / 2);
+    const sniperBarrel = new THREE.Mesh(sniperBarrelGeo, metallicMat);
+    sniperBarrel.position.set(0, 0.02, 0.62);
+    this.sniperGroup.add(sniperBarrel);
+
+    const sniperBrakeGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.10, 8);
+    sniperBrakeGeo.rotateX(Math.PI / 2);
+    const sniperBrake = new THREE.Mesh(sniperBrakeGeo, metallicMat);
+    sniperBrake.position.set(0, 0.02, 0.96);
+    this.sniperGroup.add(sniperBrake);
+
+    const sniperScopeGeo = new THREE.CylinderGeometry(0.032, 0.032, 0.32, 8);
+    sniperScopeGeo.rotateX(Math.PI / 2);
+    const sniperScope = new THREE.Mesh(sniperScopeGeo, armorDarkMat);
+    sniperScope.position.set(0, 0.11, 0.08);
+    this.sniperGroup.add(sniperScope);
+
+    const sniperScopeLens = new THREE.Mesh(new THREE.CircleGeometry(0.028, 8), visorMat);
+    sniperScopeLens.position.set(0, 0.11, 0.245);
+    this.sniperGroup.add(sniperScopeLens);
+
+    const sniperMag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.18, 0.09), polymerMat);
+    sniperMag.position.set(0, -0.12, 0.06);
+    this.sniperGroup.add(sniperMag);
+
+    this.sniperGroup.position.set(0, -0.45, 0.2);
+    this.sniperGroup.visible = false;
+    this.rightArmPivot.add(this.sniperGroup);
+
+    // Muzzle Socket & Multi-Layer Remote Flash (attached directly to right arm pivot)
     this.muzzleSocket = new THREE.Group();
-    this.muzzleSocket.position.set(0, 0.01, 0.73);
-    this.rifleGroup.add(this.muzzleSocket);
+    this.muzzleSocket.position.set(0, -0.44, 0.93);
+    this.rightArmPivot.add(this.muzzleSocket);
 
     // Flash core octahedron
     const coreGeo = new THREE.OctahedronGeometry(0.12, 0);
@@ -304,9 +406,6 @@ export class RemotePlayer {
     this.muzzleLight = new THREE.PointLight(0x00e5ff, 0, 7);
     this.muzzleSocket.add(this.muzzleLight);
 
-    // Mount rifle to right arm
-    this.rifleGroup.position.set(0, -0.45, 0.2);
-    this.rightArmPivot.add(this.rifleGroup);
     this.visualRoot.add(this.rightArmPivot);
 
     // 5. Left Leg Pivot (hip at y = 0.75, x = -0.16)
@@ -420,7 +519,28 @@ export class RemotePlayer {
   }
 
   /**
-   * Queries the world-space position of this remote player's rifle muzzle.
+   * Switches the active weapon displayed in the remote player's right hand.
+   */
+  public setWeapon(weaponId: WeaponId) {
+    this.currentWeapon = weaponId;
+    if (this.knifeGroup) this.knifeGroup.visible = weaponId === 'knife';
+    if (this.pistolGroup) this.pistolGroup.visible = weaponId === 'pistol';
+    if (this.rifleGroup) this.rifleGroup.visible = weaponId === 'rifle';
+    if (this.sniperGroup) this.sniperGroup.visible = weaponId === 'sniper';
+
+    if (this.muzzleSocket) {
+      if (weaponId === 'sniper') {
+        this.muzzleSocket.position.set(0, -0.43, 1.18);
+      } else if (weaponId === 'pistol') {
+        this.muzzleSocket.position.set(0, -0.39, 0.44);
+      } else {
+        this.muzzleSocket.position.set(0, -0.44, 0.93);
+      }
+    }
+  }
+
+  /**
+   * Queries the world-space position of this remote player's weapon muzzle.
    */
   public getMuzzleWorldPosition(target: THREE.Vector3 = new THREE.Vector3()): THREE.Vector3 {
     if (this.muzzleSocket) {
@@ -430,15 +550,40 @@ export class RemotePlayer {
   }
 
   /**
-   * Triggers visual shooting feedback on this remote player:
-   * - Illuminates bright multi-layer muzzle flash & point light
-   * - Kicks the arm and weapon with snappy recoil animation
+   * Triggers visual shooting or melee slash feedback on this remote player:
+   * - Knife: executes an aggressive forward slashing arm animation
+   * - Firearms: illuminates multi-layer muzzle flash & kicks the arm with weapon recoil
    */
-  public triggerFire(_endX?: number, _endY?: number, _endZ?: number, _hitTarget: boolean = false) {
-    this.muzzleFlashTimer = 0.09;
-    this.muzzleFlashFrames = 3;
-    this.armRecoil = 0.22;
-    this.weaponKickZ = 0.06;
+  public triggerFire(
+    _endX?: number,
+    _endY?: number,
+    _endZ?: number,
+    _hitTarget: boolean = false,
+    weaponId: WeaponId = this.currentWeapon,
+    isMelee: boolean = false
+  ) {
+    if (isMelee || weaponId === 'knife') {
+      this.slashTimer = 0.25;
+      return;
+    }
+
+    const isSniper = weaponId === 'sniper';
+    const isPistol = weaponId === 'pistol';
+
+    this.muzzleFlashTimer = isSniper ? 0.14 : isPistol ? 0.06 : 0.09;
+    this.muzzleFlashFrames = isSniper ? 5 : 3;
+    this.armRecoil = isSniper ? 0.42 : isPistol ? 0.14 : 0.22;
+    this.weaponKickZ = isSniper ? 0.12 : isPistol ? 0.04 : 0.06;
+
+    if (this.muzzleSocket) {
+      if (isSniper) {
+        this.muzzleSocket.position.set(0, -0.43, 1.18);
+      } else if (isPistol) {
+        this.muzzleSocket.position.set(0, -0.39, 0.44);
+      } else {
+        this.muzzleSocket.position.set(0, -0.44, 0.93);
+      }
+    }
 
     if (this.muzzleFlashCore && this.muzzleFlashCross && this.muzzleLight) {
       this.muzzleFlashCore.visible = true;
@@ -446,7 +591,7 @@ export class RemotePlayer {
       (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 1.0;
       (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0.95;
       this.muzzleFlashCross.rotation.z = Math.random() * Math.PI;
-      this.muzzleLight.intensity = 5.0;
+      this.muzzleLight.intensity = isSniper ? 8.0 : isPistol ? 3.5 : 5.0;
     }
   }
 
@@ -483,6 +628,19 @@ export class RemotePlayer {
 
     if (typeof state.isMoving === 'boolean') this.isMoving = state.isMoving;
     if (typeof state.isShielded === 'boolean') this.isShielded = state.isShielded;
+
+    // Synchronize equipped weapon
+    if (
+      typeof state.currentWeapon === 'string' &&
+      (state.currentWeapon === 'knife' ||
+        state.currentWeapon === 'pistol' ||
+        state.currentWeapon === 'rifle' ||
+        state.currentWeapon === 'sniper')
+    ) {
+      if (state.currentWeapon !== this.currentWeapon) {
+        this.setWeapon(state.currentWeapon as WeaponId);
+      }
+    }
 
     let redraw = false;
     if (typeof state.health === 'number' && state.health !== this.health) {
@@ -562,39 +720,54 @@ export class RemotePlayer {
       }
     }
 
-    // 6. Recoil recovery
-    this.armRecoil = Math.max(0, this.armRecoil - dt * 1.8);
-    this.weaponKickZ = Math.max(0, this.weaponKickZ - dt * 0.6);
+    // 6. Recoil & melee slash recovery
+    this.armRecoil = Math.max(0, this.armRecoil - dt * 2.2);
+    this.weaponKickZ = Math.max(0, this.weaponKickZ - dt * 0.8);
+    if (this.slashTimer > 0) {
+      this.slashTimer = Math.max(0, this.slashTimer - dt);
+    }
 
-    // 6. Smooth aim pitch tracking (tilt head and weapon arm)
+    // 7. Smooth aim pitch tracking (tilt head and weapon arm)
     this.currentPitch = THREE.MathUtils.lerp(this.currentPitch, this.targetPitch, Math.min(1, dt * 15));
     this.headMesh.rotation.x = -this.currentPitch * 0.75;
 
-    // 7. Walk cycle animation when moving
-    if (this.isMoving) {
-      this.walkCycleTime += dt * 10;
-      const swing = Math.sin(this.walkCycleTime) * 0.45;
-      this.leftLegPivot.rotation.x = swing;
-      this.rightLegPivot.rotation.x = -swing;
-      this.leftArmPivot.rotation.x = -swing * 0.7;
-      // Right arm holds rifle steady with pitch offset and firing recoil climb
-      this.rightArmPivot.rotation.x = -Math.PI / 4 - this.currentPitch * 0.45 + Math.cos(this.walkCycleTime) * 0.05 - this.armRecoil;
+    // 8. Arm pose and animation (walking vs idle vs slashing)
+    if (this.slashTimer > 0) {
+      const slashPct = 1 - this.slashTimer / 0.25;
+      const slashSwing = Math.sin(slashPct * Math.PI) * 0.85;
+      this.rightArmPivot.rotation.x = -Math.PI / 4 + slashSwing;
+      this.rightArmPivot.rotation.z = -slashSwing * 0.45;
     } else {
-      // Idle pose
-      this.leftLegPivot.rotation.x = THREE.MathUtils.lerp(this.leftLegPivot.rotation.x, 0, dt * 10);
-      this.rightLegPivot.rotation.x = THREE.MathUtils.lerp(this.rightLegPivot.rotation.x, 0, dt * 10);
-      this.leftArmPivot.rotation.x = THREE.MathUtils.lerp(this.leftArmPivot.rotation.x, 0, dt * 10);
-      this.rightArmPivot.rotation.x = THREE.MathUtils.lerp(
-        this.rightArmPivot.rotation.x,
-        -Math.PI / 4 - this.currentPitch * 0.45 - this.armRecoil,
-        dt * 15
-      );
+      this.rightArmPivot.rotation.z = THREE.MathUtils.lerp(this.rightArmPivot.rotation.z, 0, dt * 15);
+      if (this.isMoving) {
+        this.walkCycleTime += dt * 10;
+        const swing = Math.sin(this.walkCycleTime) * 0.45;
+        this.leftLegPivot.rotation.x = swing;
+        this.rightLegPivot.rotation.x = -swing;
+        this.leftArmPivot.rotation.x = -swing * 0.7;
+        // Right arm holds weapon steady with pitch offset and firing recoil climb
+        this.rightArmPivot.rotation.x =
+          -Math.PI / 4 - this.currentPitch * 0.45 + Math.cos(this.walkCycleTime) * 0.05 - this.armRecoil;
+      } else {
+        // Idle pose
+        this.leftLegPivot.rotation.x = THREE.MathUtils.lerp(this.leftLegPivot.rotation.x, 0, dt * 10);
+        this.rightLegPivot.rotation.x = THREE.MathUtils.lerp(this.rightLegPivot.rotation.x, 0, dt * 10);
+        this.leftArmPivot.rotation.x = THREE.MathUtils.lerp(this.leftArmPivot.rotation.x, 0, dt * 10);
+        this.rightArmPivot.rotation.x = THREE.MathUtils.lerp(
+          this.rightArmPivot.rotation.x,
+          -Math.PI / 4 - this.currentPitch * 0.45 - this.armRecoil,
+          dt * 15
+        );
+      }
     }
 
     // Weapon mechanical kick
-    this.rifleGroup.position.z = 0.2 - this.weaponKickZ;
+    const kickZ = this.weaponKickZ;
+    if (this.rifleGroup) this.rifleGroup.position.z = 0.2 - kickZ;
+    if (this.pistolGroup) this.pistolGroup.position.z = 0.18 - kickZ * 0.6;
+    if (this.sniperGroup) this.sniperGroup.position.z = 0.2 - kickZ * 1.4;
 
-    // 8. Shield bubble animation
+    // 9. Shield bubble animation
     if (this.isShielded) {
       this.shieldMesh.visible = true;
       this.shieldPulseTime += dt * 4;

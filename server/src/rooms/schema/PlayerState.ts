@@ -22,6 +22,7 @@ export class PlayerState extends Schema {
   @type('number') ammo: number = 24;
   @type('number') reserveAmmo: number = 72;
   @type('string') fireMode: string = 'AUTO';
+  @type('string') currentWeapon: string = 'rifle';
 
   @type('boolean') isMoving: boolean = false;
   @type('boolean') isSprinting: boolean = false;
@@ -42,6 +43,14 @@ export class PlayerState extends Schema {
   lastDamageTime: number = 0;
   isReloadingInternal: boolean = false;
   reloadExpiryTime: number = 0;
+
+  // Per-weapon loaded ammo & reserve tracking
+  weaponAmmo: Record<string, { ammo: number; reserveAmmo: number }> = {
+    knife: { ammo: 0, reserveAmmo: 0 },
+    pistol: { ammo: 12, reserveAmmo: 48 },
+    rifle: { ammo: 24, reserveAmmo: 72 },
+    sniper: { ammo: 5, reserveAmmo: 20 },
+  };
 
   // Convenient accessors for armour integrity representation
   get armor(): number {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Crosshair, Shield, Clock, Copy, Check, Skull, Zap } from 'lucide-react';
-import type { KillFeedItem } from '../../shared/types';
+import type { KillFeedItem, WeaponId } from '../../shared/types';
 
 interface FPSHUDProps {
   health: number;
@@ -12,6 +12,9 @@ interface FPSHUDProps {
   reserveAmmo?: number;
   fireMode?: 'SINGLE' | 'AUTO';
   onToggleFireMode?: () => void;
+  currentWeapon?: WeaponId;
+  isScoped?: boolean;
+  onSelectWeapon?: (weaponId: WeaponId) => void;
   isReloading: boolean;
   matchTimeSeconds: number;
   roomCode?: string;
@@ -35,6 +38,9 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
   reserveAmmo = 72,
   fireMode = 'AUTO',
   onToggleFireMode,
+  currentWeapon = 'rifle',
+  isScoped = false,
+  onSelectWeapon,
   isReloading,
   matchTimeSeconds,
   roomCode,
@@ -66,6 +72,20 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
   const healthPct = Math.max(0, Math.min(100, (health / maxHealth) * 100));
   const staminaPct = Math.max(0, Math.min(100, (stamina / maxStamina) * 100));
 
+  const weaponDisplayName: Record<WeaponId, string> = {
+    knife: 'COMBAT KNIFE K-1',
+    pistol: 'TITAN-9 PISTOL',
+    rifle: 'PULSE RIFLE Z-1',
+    sniper: 'VORTEX-50 SNIPER',
+  };
+
+  const WEAPON_SLOTS: { id: WeaponId; key: string; label: string }[] = [
+    { id: 'knife', key: '1', label: 'KNIFE' },
+    { id: 'pistol', key: '2', label: 'PISTOL' },
+    { id: 'rifle', key: '3', label: 'RIFLE' },
+    { id: 'sniper', key: '4', label: 'SNIPER' },
+  ];
+
   return (
     <div className="fps-hud-root">
       {/* 1. Fullscreen Damage Vignette Flash */}
@@ -74,7 +94,38 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
         aria-hidden="true"
       />
 
-      {/* 2. Top Header Bar: Room Code & Match Timer */}
+      {/* 2. Fullscreen Tactical Sniper Scope Overlay */}
+      {isScoped && (
+        <div className="sniper-scope-overlay" aria-hidden="true">
+          <div className="scope-lens-vignette" />
+          <div className="scope-reticle-crosshair">
+            <div className="scope-line vertical" />
+            <div className="scope-line horizontal" />
+            <div className="scope-center-circle" />
+            <div className="scope-center-dot" />
+            {/* Elevation and range hash marks */}
+            <div className="scope-hash top-1" />
+            <div className="scope-hash top-2" />
+            <div className="scope-hash bottom-1" />
+            <div className="scope-hash bottom-2" />
+            <div className="scope-hash bottom-3" />
+            <div className="scope-hash left-1" />
+            <div className="scope-hash left-2" />
+            <div className="scope-hash right-1" />
+            <div className="scope-hash right-2" />
+            <div className="scope-hud-readout readout-left">
+              <span className="readout-label">ELEV</span>
+              <span className="readout-val">100m</span>
+            </div>
+            <div className="scope-hud-readout readout-right">
+              <span className="readout-label">OPTICS</span>
+              <span className="readout-val">8.0X</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Top Header Bar: Room Code & Match Timer */}
       <header className="hud-top-bar">
         {roomCode && (
           <div className="hud-room-badge" onClick={handleCopyLink} title="Click to copy invite link">
@@ -102,7 +153,7 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
         </div>
       </header>
 
-      {/* 3. Kill Feed (Top Right) */}
+      {/* 4. Kill Feed (Top Right) */}
       <aside className="hud-killfeed">
         {killFeed.slice(-5).map((item) => (
           <div key={item.id} className="killfeed-item">
@@ -116,26 +167,38 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
         ))}
       </aside>
 
-      {/* 4. Center Reticle / Crosshair */}
-      <div className="hud-center-crosshair">
-        <div className="crosshair-reticle">
-          <div className="reticle-line top" />
-          <div className="reticle-line bottom" />
-          <div className="reticle-line left" />
-          <div className="reticle-line right" />
-          <div className="reticle-center-dot" />
-        </div>
+      {/* 5. Center Reticle / Crosshair (hidden while scoped in) */}
+      {!isScoped && (
+        <div className="hud-center-crosshair">
+          <div className="crosshair-reticle">
+            <div className="reticle-line top" />
+            <div className="reticle-line bottom" />
+            <div className="reticle-line left" />
+            <div className="reticle-line right" />
+            <div className="reticle-center-dot" />
+          </div>
 
-        {/* Dynamic Hitmarker 'X' Overlay */}
-        {showHitmarker && (
+          {/* Dynamic Hitmarker 'X' Overlay */}
+          {showHitmarker && (
+            <div className={`hitmarker-flair ${isHeadshotHit ? 'headshot' : 'bodyshot'}`}>
+              <div className="hit-slash slash-1" />
+              <div className="hit-slash slash-2" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Scoped hitmarker flair centered on sniper scope */}
+      {isScoped && showHitmarker && (
+        <div className="hud-center-crosshair">
           <div className={`hitmarker-flair ${isHeadshotHit ? 'headshot' : 'bodyshot'}`}>
             <div className="hit-slash slash-1" />
             <div className="hit-slash slash-2" />
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* 5. Pointer Lock Prompt (if cursor unlocked during match) */}
+      {/* 6. Pointer Lock Prompt (if cursor unlocked during match) */}
       {!isPointerLocked && (
         <div className="hud-pointerlock-banner" onClick={onRequestPointerLock}>
           <Crosshair size={20} className="pulse-slow" />
@@ -143,7 +206,7 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
         </div>
       )}
 
-      {/* 6. Bottom Combat Dashboard (Health, Stamina & Ammo) */}
+      {/* 7. Bottom Combat Dashboard (Health, Stamina, Weapon Hotbar & Ammo) */}
       <footer className="hud-bottom-bar">
         {/* Health Plate & Tactical Stamina (Bottom Left) */}
         <div className="hud-health-card">
@@ -184,45 +247,81 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
           </div>
         </div>
 
+        {/* Tactical Weapon Inventory Hotbar (Center Bottom) */}
+        <div className="hud-weapon-selector">
+          {WEAPON_SLOTS.map((slot) => {
+            const isActive = currentWeapon === slot.id;
+            return (
+              <button
+                key={slot.id}
+                type="button"
+                className={`weapon-slot-pill ${isActive ? 'active' : ''}`}
+                onClick={() => onSelectWeapon?.(slot.id)}
+                title={`Press [${slot.key}] to equip ${slot.label}`}
+              >
+                <span className="slot-key">[{slot.key}]</span>
+                <span className="slot-name">{slot.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* Ammunition Counter (Bottom Right) */}
         <div className="hud-ammo-card">
           <div className="ammo-header">
-            <span className="ammo-weapon-name">PULSE RIFLE MK-IV</span>
+            <span className="ammo-weapon-name">{weaponDisplayName[currentWeapon]}</span>
             <div className="ammo-header-right">
-              <button
-                type="button"
-                className={`fire-mode-badge ${fireMode.toLowerCase()}`}
-                onClick={onToggleFireMode}
-                title="Press [B] or click to switch firing mode"
-              >
-                <span className="fire-mode-text">MODE: {fireMode}</span>
-                <span className="fire-mode-key">[B]</span>
-              </button>
-              <span className="ammo-status-tag">{isReloading ? 'RELOADING...' : 'CHARGED'}</span>
+              {currentWeapon === 'rifle' && onToggleFireMode ? (
+                <button
+                  type="button"
+                  className={`fire-mode-badge ${fireMode.toLowerCase()}`}
+                  onClick={onToggleFireMode}
+                  title="Press [B] or click to switch firing mode"
+                >
+                  <span className="fire-mode-text">MODE: {fireMode}</span>
+                  <span className="fire-mode-key">[B]</span>
+                </button>
+              ) : (
+                <span className="fire-mode-badge-static">
+                  {currentWeapon === 'knife' ? 'MELEE' : currentWeapon === 'pistol' ? 'SEMI-AUTO' : 'BOLT-ACTION'}
+                </span>
+              )}
+              <span className="ammo-status-tag">
+                {currentWeapon === 'knife' ? 'READY' : isReloading ? 'RELOADING...' : 'CHARGED'}
+              </span>
             </div>
           </div>
 
           <div className="ammo-display">
-            <div className="ammo-count">
-              <span className={`current-rounds ${ammo <= 6 ? 'ammo-low' : ''}`}>{ammo}</span>
-              <span className="capacity"> / {maxAmmo}</span>
-              <span className="reserve-ammo-count"> [{reserveAmmo}]</span>
-            </div>
+            {currentWeapon === 'knife' ? (
+              <div className="ammo-count">
+                <span className="current-rounds melee-infinity">∞</span>
+                <span className="capacity"> MELEE</span>
+              </div>
+            ) : (
+              <>
+                <div className="ammo-count">
+                  <span className={`current-rounds ${ammo <= Math.ceil(maxAmmo * 0.25) ? 'ammo-low' : ''}`}>{ammo}</span>
+                  <span className="capacity"> / {maxAmmo}</span>
+                  <span className="reserve-ammo-count"> [{reserveAmmo}]</span>
+                </div>
 
-            {/* Visual bullet cell indicators */}
-            <div className="ammo-cartridge-cells">
-              {Array.from({ length: 12 }).map((_, i) => (
-                <span
-                  key={i}
-                  className={`ammo-cell ${i < Math.ceil(ammo / 2) ? 'charged' : 'depleted'}`}
-                />
-              ))}
-            </div>
+                {/* Visual bullet cell indicators */}
+                <div className="ammo-cartridge-cells">
+                  {Array.from({ length: maxAmmo }).map((_, i) => (
+                    <span
+                      key={i}
+                      className={`ammo-cell ${i < ammo ? 'charged' : 'depleted'}`}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
-          {ammo === 0 && !isReloading && reserveAmmo > 0 && (
+          {currentWeapon !== 'knife' && ammo === 0 && !isReloading && reserveAmmo > 0 && (
             <div className="reload-prompt-chip">RELOADING...</div>
           )}
-          {ammo === 0 && !isReloading && reserveAmmo === 0 && (
+          {currentWeapon !== 'knife' && ammo === 0 && !isReloading && reserveAmmo === 0 && (
             <div className="reload-prompt-chip ammo-empty">OUT OF AMMO</div>
           )}
         </div>

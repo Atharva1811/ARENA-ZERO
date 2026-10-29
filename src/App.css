@@ -1664,3 +1664,205 @@ body, html, #root {
 /* Utility Helpers */
 .text-cyan { color: var(--accent-cyan); }
 .text-emerald { color: var(--accent-emerald); }
+
+/* ========================================================
+   Sniper Scope Overlay & Reticle
+   ======================================================== */
+.sniper-scope-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scope-lens-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, transparent 32vmin, rgba(0, 0, 0, 0.94) 37vmin, #000000 44vmin);
+  box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.9);
+}
+
+.scope-reticle-crosshair {
+  position: relative;
+  width: 70vmin;
+  height: 70vmin;
+  border-radius: 50%;
+  border: 1.5px solid rgba(56, 189, 248, 0.35);
+  box-shadow: 0 0 25px rgba(56, 189, 248, 0.15), inset 0 0 25px rgba(56, 189, 248, 0.15);
+  pointer-events: none;
+}
+
+.scope-line {
+  position: absolute;
+  background: rgba(56, 189, 248, 0.85);
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.8);
+}
+
+.scope-line.vertical {
+  width: 1.5px;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.scope-line.horizontal {
+  height: 1.5px;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.scope-center-circle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(56, 189, 248, 0.9);
+}
+
+.scope-center-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 8px #ef4444, 0 0 14px #ef4444;
+}
+
+/* Elevation and windage hash ticks */
+.scope-hash {
+  position: absolute;
+  background: rgba(56, 189, 248, 0.7);
+}
+
+.scope-hash.top-1 { top: 38%; left: calc(50% - 6px); width: 12px; height: 1.5px; }
+.scope-hash.top-2 { top: 26%; left: calc(50% - 10px); width: 20px; height: 1.5px; }
+.scope-hash.bottom-1 { top: 62%; left: calc(50% - 6px); width: 12px; height: 1.5px; }
+.scope-hash.bottom-2 { top: 74%; left: calc(50% - 10px); width: 20px; height: 1.5px; }
+.scope-hash.bottom-3 { top: 86%; left: calc(50% - 14px); width: 28px; height: 1.5px; }
+
+.scope-hash.left-1 { left: 38%; top: calc(50% - 6px); height: 12px; width: 1.5px; }
+.scope-hash.left-2 { left: 26%; top: calc(50% - 10px); height: 20px; width: 1.5px; }
+.scope-hash.right-1 { right: 38%; top: calc(50% - 6px); height: 12px; width: 1.5px; }
+.scope-hash.right-2 { right: 26%; top: calc(50% - 10px); height: 20px; width: 1.5px; }
+
+.scope-hud-readout {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: #38bdf8;
+  text-shadow: 0 0 8px rgba(56, 189, 248, 0.7);
+}
+
+.scope-hud-readout.readout-left {
+  bottom: 25%;
+  left: 20%;
+  text-align: left;
+}
+
+.scope-hud-readout.readout-right {
+  bottom: 25%;
+  right: 20%;
+  text-align: right;
+}
+
+.scope-hud-readout .readout-label {
+  font-size: 0.58rem;
+  color: #94a3b8;
+}
+
+.scope-hud-readout .readout-val {
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+
+/* ========================================================
+   Tactical Weapon Hotbar Selector
+   ======================================================== */
+.hud-weapon-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(13, 19, 33, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 12px;
+  padding: 0.4rem 0.6rem;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.weapon-slot-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.weapon-slot-pill:hover {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #e2e8f0;
+}
+
+.weapon-slot-pill.active {
+  background: rgba(14, 165, 233, 0.28);
+  border-color: #38bdf8;
+  color: #ffffff;
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.45);
+}
+
+.weapon-slot-pill .slot-key {
+  font-family: monospace;
+  color: #38bdf8;
+  font-weight: 800;
+}
+
+.weapon-slot-pill.active .slot-key {
+  color: #7dd3fc;
+}
+
+/* Static fire mode badge */
+.fire-mode-badge-static {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+}
+
+.melee-infinity {
+  font-size: 2.2rem !important;
+  line-height: 1;
+  color: #38bdf8 !important;
+  text-shadow: 0 0 12px rgba(56, 189, 248, 0.6);
+}

@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "tsx src/index.ts",
-    "test": "tsx test-suite.ts && tsx test-remote-shooting.ts && tsx test-private-rooms.ts && tsx test-stamina-combat.ts"
+    "test": "tsx test-suite.ts && tsx test-remote-shooting.ts && tsx test-private-rooms.ts && tsx test-stamina-combat.ts && tsx test-multi-weapon.ts"
   },
   "dependencies": {
     "@colyseus/schema": "^2.0.36",

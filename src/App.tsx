@@ -9,7 +9,7 @@ import { DeathScreen } from './components/DeathScreen';
 import { InGameMenu } from './components/InGameMenu';
 import { MatchOverModal } from './components/MatchOverModal';
 import { GAME_CONSTANTS } from '../shared/constants';
-import type { KillFeedItem, MatchWinnerPayload } from '../shared/types';
+import type { KillFeedItem, MatchWinnerPayload, WeaponId } from '../shared/types';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -49,6 +49,8 @@ export const App: React.FC = () => {
   const [maxAmmo] = useState<number>(GAME_CONSTANTS.MAGAZINE_SIZE);
   const [reserveAmmo, setReserveAmmo] = useState<number>(GAME_CONSTANTS.MAX_RESERVE_AMMO);
   const [fireMode, setFireMode] = useState<'SINGLE' | 'AUTO'>('AUTO');
+  const [currentWeapon, setCurrentWeapon] = useState<WeaponId>('rifle');
+  const [isScoped, setIsScoped] = useState<boolean>(false);
   const [isReloading, setIsReloading] = useState<boolean>(false);
   const [matchTime, setMatchTime] = useState<number>(600);
   const [killFeed, setKillFeed] = useState<KillFeedItem[]>([]);
@@ -184,6 +186,12 @@ export const App: React.FC = () => {
       },
       onFireModeChange: (mode) => {
         setFireMode(mode);
+      },
+      onWeaponChange: (weaponId) => {
+        setCurrentWeapon(weaponId);
+      },
+      onScopeChange: (scoped) => {
+        setIsScoped(scoped);
       },
       onCrosshairHit: (headshot) => {
         setIsHeadshotHit(headshot);
@@ -361,6 +369,10 @@ export const App: React.FC = () => {
     engineRef.current?.toggleFireMode();
   }, []);
 
+  const handleSelectWeapon = useCallback((weaponId: WeaponId) => {
+    engineRef.current?.switchWeapon(weaponId);
+  }, []);
+
   return (
     <div className="arena-app-container">
       {/* 3D WebGL Canvas Viewport */}
@@ -399,6 +411,9 @@ export const App: React.FC = () => {
           reserveAmmo={reserveAmmo}
           fireMode={fireMode}
           onToggleFireMode={handleToggleFireMode}
+          currentWeapon={currentWeapon}
+          isScoped={isScoped}
+          onSelectWeapon={handleSelectWeapon}
           isReloading={isReloading}
           matchTimeSeconds={matchTime}
           roomCode={roomCode}
