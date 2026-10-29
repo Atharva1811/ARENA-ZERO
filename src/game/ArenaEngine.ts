@@ -362,7 +362,15 @@ export class ArenaEngine {
 
         if (typeof player.isAlive === 'boolean' && player.isAlive !== this.isAlive) {
           this.isAlive = player.isAlive;
-          if (!this.isAlive) {
+          if (this.isAlive) {
+            // Player respawned via server state sync
+            this.health = player.health;
+            this.ammo = player.ammo;
+            this.isReloading = false;
+            this.callbacks.onHealthChange?.(this.health, this.maxHealth);
+            this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+            this.callbacks.onPlayerRespawn?.();
+          } else {
             this.fpsController.exitPointerLock();
             this.callbacks.onPlayerDeath?.('Opponent');
           }

@@ -5,7 +5,8 @@ import colyseus from 'colyseus';
 import { matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { ArenaRoom } from './src/rooms/ArenaRoom.js';
-import { Client } from 'colyseus.js';
+import { ArenaState } from './src/rooms/schema/ArenaState.js';
+import { Client, Room } from 'colyseus.js';
 import { GAME_CONSTANTS } from '../shared/constants.js';
 
 const { Server } = colyseus;
@@ -45,9 +46,9 @@ async function runRegressionTests() {
     return room;
   }
 
-  async function connectPlayer(nickname: string, options: any = {}) {
+  async function connectPlayer(nickname: string, options: any = {}): Promise<{ client: Client; room: Room<ArenaState> }> {
     const client = new Client(`ws://localhost:${port}`);
-    const room = await client.joinOrCreate('arena_public', { nickname, ...options });
+    const room = await client.joinOrCreate<ArenaState>('arena_public', { nickname, ...options });
     return { client, room };
   }
 
@@ -207,7 +208,8 @@ async function runRegressionTests() {
       p2.leave();
       await new Promise(r => setTimeout(r, 100));
 
-      if (sRoom.state.players.size !== 0) {
+      const remainingPlayers: number = sRoom.state.players.size;
+      if (remainingPlayers !== 0) {
         passedCycles = false;
         break;
       }

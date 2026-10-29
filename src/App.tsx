@@ -8,6 +8,7 @@ import { Scoreboard } from './components/Scoreboard';
 import { DeathScreen } from './components/DeathScreen';
 import { InGameMenu } from './components/InGameMenu';
 import { MatchOverModal } from './components/MatchOverModal';
+import { GAME_CONSTANTS } from '../shared/constants';
 import type { KillFeedItem, MatchWinnerPayload } from '../shared/types';
 import './App.css';
 
@@ -47,6 +48,7 @@ export const App: React.FC = () => {
   const [isReloading, setIsReloading] = useState<boolean>(false);
   const [matchTime, setMatchTime] = useState<number>(600);
   const [killFeed, setKillFeed] = useState<KillFeedItem[]>([]);
+  const killFeedTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [players, setPlayers] = useState<PlayerScoreEntry[]>([]);
 
   // Feedback animations
@@ -59,7 +61,19 @@ export const App: React.FC = () => {
   const [sensitivity, setSensitivity] = useState<number>(0.0022);
   const [invertY, setInvertY] = useState<boolean>(false);
 
+  // Clear all pending kill feed expiration timers on unmount
+  useEffect(() => {
+    const timers = killFeedTimersRef.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
+
   const handleLeaveMatch = useCallback(() => {
+    killFeedTimersRef.current.forEach((timer) => clearTimeout(timer));
+    killFeedTimersRef.current.clear();
+    setKillFeed([]);
     if (engineRef.current) {
       engineRef.current.dispose();
       engineRef.current = null;
@@ -164,7 +178,21 @@ export const App: React.FC = () => {
         setTimeout(() => setShowDamageVignette(false), 240);
       },
       onKillFeed: (item) => {
-        setKillFeed((prev) => [...prev.slice(-9), item]);
+        // Prevent duplicate messages
+        if (killFeedTimersRef.current.has(item.id)) return;
+
+        setKillFeed((prev) => {
+          if (prev.some((k) => k.id === item.id)) return prev;
+          return [...prev.slice(-9), item];
+        });
+
+        // Dedicated 5-second lifetime per kill notification
+        const timer = setTimeout(() => {
+          setKillFeed((prev) => prev.filter((k) => k.id !== item.id));
+          killFeedTimersRef.current.delete(item.id);
+        }, GAME_CONSTANTS.KILL_FEED_EXPIRY_MS);
+
+        killFeedTimersRef.current.set(item.id, timer);
       },
       onScoreboardUpdate: (entries) => {
         setPlayers(entries);
@@ -265,11 +293,11 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleRespawn = () => {
+  const handleRespawn = useCallback(() => {
     if (engineRef.current) {
       engineRef.current.requestRespawn();
     }
-  };
+  }, []);
 
   const handleResume = () => {
     setIsPaused(false);

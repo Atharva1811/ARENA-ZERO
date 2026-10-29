@@ -20,6 +20,9 @@ export const GAME_CONSTANTS = {
   // Combat rules
   RESPAWN_TIME_MS: 3000,
   SPAWN_PROTECTION_MS: 2500, // Invulnerability shield upon spawn
+  ARMOUR_REGEN_DELAY_MS: 4000, // 4 second delay after taking armour damage
+  ARMOUR_REGEN_PER_SECOND: 15, // Regenerate 15 armour points per second
+  KILL_FEED_EXPIRY_MS: 5000, // Kill notifications disappear after 5 seconds
   MATCH_SCORE_LIMIT: 20,     // First to 20 kills wins
   MATCH_DURATION_SEC: 600,   // 10 minute match timer
   ROOM_CAPACITY: 8,

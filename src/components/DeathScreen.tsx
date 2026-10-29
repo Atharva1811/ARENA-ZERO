@@ -13,16 +13,21 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({ killerName, onRespawn 
   );
 
   useEffect(() => {
+    const startTime = Date.now();
+    const durationMs = GAME_CONSTANTS.RESPAWN_TIME_MS;
+    let hasTriggered = false;
+
     const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          onRespawn();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+      const elapsed = Date.now() - startTime;
+      const remainingSec = Math.max(0, Math.ceil((durationMs - elapsed) / 1000));
+      setCountdown(remainingSec);
+
+      if (remainingSec <= 0 && !hasTriggered) {
+        hasTriggered = true;
+        clearInterval(timer);
+        onRespawn();
+      }
+    }, 100);
 
     return () => clearInterval(timer);
   }, [onRespawn]);

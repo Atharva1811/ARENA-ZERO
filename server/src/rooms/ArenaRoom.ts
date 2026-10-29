@@ -593,6 +593,7 @@ export class ArenaRoom extends Room<ArenaState> {
         const bestTarget = this.state.players.get(hitTargetSessionId);
         if (bestTarget && bestTarget.isAlive) {
           bestTarget.isShielded = false; // Valid confirmed hit breaks spawn shield
+          bestTarget.lastDamageTime = now; // Armour damage restarts 4-second regen delay
           const healthBefore = bestTarget.health;
           const damage = isHeadshot ? GAME_CONSTANTS.HEADSHOT_DAMAGE : GAME_CONSTANTS.WEAPON_DAMAGE;
           bestTarget.health = Math.max(0, bestTarget.health - damage);
@@ -632,8 +633,9 @@ export class ArenaRoom extends Room<ArenaState> {
             }
           }
 
-          // Check for elimination
-          if (bestTarget.health <= 0) {
+          // Check for elimination (strictly once per death)
+          if (bestTarget.health <= 0 && bestTarget.isAlive) {
+            bestTarget.health = 0;
             bestTarget.isAlive = false;
             bestTarget.deaths++;
             bestTarget.respawnTime = now + GAME_CONSTANTS.RESPAWN_TIME_MS;
@@ -689,13 +691,10 @@ export class ArenaRoom extends Room<ArenaState> {
     player.reloadExpiryTime = Date.now() + GAME_CONSTANTS.RELOAD_TIME_MS;
   }
 
-  private handleRespawnRequest(client: Client) {
-    const player = this.state.players.get(client.sessionId);
+  private executePlayerRespawn(player: PlayerState) {
     if (!player || player.isAlive) return;
 
     const now = Date.now();
-    if (now < player.respawnTime) return; // Must wait for respawn timer
-
     const spawn = this.getSafestSpawnPoint();
     player.x = spawn.x;
     player.y = spawn.y;
@@ -705,27 +704,44 @@ export class ArenaRoom extends Room<ArenaState> {
     player.spawnZ = spawn.z;
     player.lastMoveTime = 0; // Initialize so respawn movement is accepted smoothly
     player.health = GAME_CONSTANTS.MAX_HEALTH;
+    player.maxHealth = GAME_CONSTANTS.MAX_HEALTH;
     player.ammo = GAME_CONSTANTS.MAGAZINE_SIZE;
     player.isAlive = true;
     player.isReloading = false;
     player.isReloadingInternal = false;
+    player.respawnTime = 0;
+    player.lastDamageTime = now; // Reset armour regen delay timer
 
     // Grant temporary spawn protection shield
     player.isShielded = true;
     player.shieldExpiryTime = now + GAME_CONSTANTS.SPAWN_PROTECTION_MS;
 
-    console.log(`[CombatDiag:10/11 TARGET_DEATH_AND_RESPAWN] RESPAWN_EXECUTED: sessionId=${client.sessionId} nickname=${player.nickname} pos=(${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)})`);
+    console.log(`[CombatDiag:10/11 TARGET_DEATH_AND_RESPAWN] RESPAWN_EXECUTED: sessionId=${player.sessionId} nickname=${player.nickname} pos=(${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)})`);
 
-    try {
-      client.send('respawn_confirmed', {
-        x: player.x,
-        y: player.y,
-        z: player.z,
-        yaw: player.yaw,
-      });
-    } catch (e) {
-      console.warn(`[ArenaRoom] Failed to send respawn_confirmed to client ${client.sessionId}:`, e);
+    const client = this.clients.find((c) => c.sessionId === player.sessionId);
+    if (client) {
+      try {
+        client.send('respawn_confirmed', {
+          x: player.x,
+          y: player.y,
+          z: player.z,
+          yaw: player.yaw,
+        });
+      } catch (e) {
+        console.warn(`[ArenaRoom] Failed to send respawn_confirmed to client ${client.sessionId}:`, e);
+      }
     }
+  }
+
+  private handleRespawnRequest(client: Client) {
+    const player = this.state.players.get(client.sessionId);
+    if (!player || player.isAlive) return;
+
+    const now = Date.now();
+    // Allow a small 150ms network/clock tolerance buffer so client requests aren't dropped prematurely
+    if (now < player.respawnTime - 150) return;
+
+    this.executePlayerRespawn(player);
   }
 
   private getSafestSpawnPoint(): { x: number; y: number; z: number; yaw: number } {
@@ -753,11 +769,27 @@ export class ArenaRoom extends Room<ArenaState> {
     return bestSpawn;
   }
 
-  private update(_deltaTime: number) {
+  private update(deltaTime: number) {
     const now = Date.now();
 
-    // Check expiry for spawn shields and reloads
     this.state.players.forEach((player) => {
+      // 1. Automatic respawn execution when respawn cooldown timer expires
+      if (!player.isAlive && player.respawnTime > 0 && now >= player.respawnTime) {
+        this.executePlayerRespawn(player);
+      }
+
+      // 2. Gradual Armour Integrity Regeneration
+      // When armour integrity drops below 100%, wait 4s after last damage.
+      // Once delay expires, regenerate armour gradually until exactly 100%.
+      if (player.isAlive && player.health < player.maxHealth) {
+        if (now - player.lastDamageTime >= GAME_CONSTANTS.ARMOUR_REGEN_DELAY_MS) {
+          const dtSeconds = Math.max(0.001, Math.min(0.2, (deltaTime || 50) / 1000));
+          const regenAmount = GAME_CONSTANTS.ARMOUR_REGEN_PER_SECOND * dtSeconds;
+          player.health = Math.min(player.maxHealth, player.health + regenAmount);
+        }
+      }
+
+      // 3. Check expiry for spawn shields and reloads
       if (player.isShielded && now >= player.shieldExpiryTime) {
         player.isShielded = false;
       }
@@ -768,7 +800,7 @@ export class ArenaRoom extends Room<ArenaState> {
         player.isReloadingInternal = false;
       }
 
-      // Reset firing visual state
+      // 4. Reset firing visual state
       if (player.isFiring) {
         player.isFiring = false;
       }

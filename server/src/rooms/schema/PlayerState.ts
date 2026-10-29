@@ -34,6 +34,21 @@ export class PlayerState extends Schema {
   lastMoveTime: number = 0;
   shieldExpiryTime: number = 0;
   respawnTime: number = 0;
+  lastDamageTime: number = 0;
   isReloadingInternal: boolean = false;
   reloadExpiryTime: number = 0;
+
+  // Convenient accessors for armour integrity representation
+  get armor(): number {
+    return this.health;
+  }
+  set armor(val: number) {
+    this.health = val;
+  }
+  get armour(): number {
+    return this.health;
+  }
+  set armour(val: number) {
+    this.health = val;
+  }
 }
