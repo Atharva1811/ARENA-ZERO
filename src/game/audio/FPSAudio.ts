@@ -53,6 +53,74 @@ export class FPSAudio {
     this.playGunshot();
   }
 
+  /**
+   * Distance-attenuated gunshot sound for remote player weapon fire.
+   * Volume falls off with distance and high frequencies are attenuated (air absorption).
+   */
+  public playRemoteGunshot(distance: number) {
+    this.init();
+    if (!this.ctx || !this.sfxGain || this.isMuted) return;
+    if (!Number.isFinite(distance) || distance > 70) return;
+
+    try {
+      const dist = Math.max(0, distance);
+      const t = this.ctx.currentTime;
+
+      // Distance attenuation factor
+      const atten = 1 / (1 + 0.12 * dist + 0.006 * dist * dist);
+      if (atten < 0.01) return;
+
+      // Distance lowpass filter (air dampening: distant shots sound muffled / bassier)
+      const distFilter = this.ctx.createBiquadFilter();
+      distFilter.type = 'lowpass';
+      distFilter.frequency.setValueAtTime(Math.max(500, 4200 / (1 + 0.05 * dist)), t);
+
+      // Dedicated distance gain node
+      const distGain = this.ctx.createGain();
+      distGain.gain.setValueAtTime(Math.min(1.0, atten * 0.38), t);
+
+      distGain.connect(distFilter);
+      distFilter.connect(this.sfxGain);
+
+      // Main pulse tone
+      const osc = this.ctx.createOscillator();
+      const oscGain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(620, t);
+      osc.frequency.exponentialRampToValueAtTime(75, t + 0.10);
+
+      oscGain.gain.setValueAtTime(0.3, t);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+
+      osc.connect(oscGain);
+      oscGain.connect(distGain);
+
+      // Crisp noise transient crack
+      const noise = this.ctx.createBufferSource();
+      const buffer = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * 0.04), this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.45;
+      noise.buffer = buffer;
+
+      const nFilter = this.ctx.createBiquadFilter();
+      nFilter.type = 'bandpass';
+      nFilter.frequency.setValueAtTime(1400, t);
+      nFilter.Q.setValueAtTime(1.5, t);
+
+      const nGain = this.ctx.createGain();
+      nGain.gain.setValueAtTime(0.25, t);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+
+      noise.connect(nFilter);
+      nFilter.connect(nGain);
+      nGain.connect(distGain);
+
+      osc.start(t);
+      osc.stop(t + 0.11);
+      noise.start(t);
+    } catch {}
+  }
+
   public playHitMarker(isHeadshot: boolean = false) {
     this.init();
     this.playHitDing(isHeadshot);

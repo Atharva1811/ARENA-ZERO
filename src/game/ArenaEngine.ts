@@ -189,7 +189,7 @@ export class ArenaEngine {
       }
     };
 
-    // Remote weapon tracer
+    // Remote weapon tracer & shooting feedback
     this.colyseus.onWeaponTracer = (data) => {
       if (!data || this.isDisposed) return;
       if (data.shooterId !== this.colyseus.mySessionId) {
@@ -202,15 +202,44 @@ export class ArenaEngine {
           Number.isFinite(data.endZ)
         ) {
           try {
+            let startX = data.startX;
+            let startY = data.startY;
+            let startZ = data.startZ;
+
+            // 1. Look up shooter in active remote player roster
+            const remoteShooter = this.remotePlayers.get(data.shooterId);
+            if (remoteShooter) {
+              // Trigger visual muzzle flash & arm recoil animation
+              remoteShooter.triggerFire(data.endX, data.endY, data.endZ, !!data.hitTarget);
+
+              // Query authoritative muzzle tip world position so the tracer connects from the rifle barrel
+              const muzzleWorldPos = remoteShooter.getMuzzleWorldPosition(new THREE.Vector3());
+              if (
+                Number.isFinite(muzzleWorldPos.x) &&
+                Number.isFinite(muzzleWorldPos.y) &&
+                Number.isFinite(muzzleWorldPos.z)
+              ) {
+                startX = muzzleWorldPos.x;
+                startY = muzzleWorldPos.y;
+                startZ = muzzleWorldPos.z;
+              }
+            }
+
+            // 2. Spawn 3D laser tracer beam with impact sparks
             this.effectManager.addTracer(
-              data.startX,
-              data.startY,
-              data.startZ,
+              startX,
+              startY,
+              startZ,
               data.endX,
               data.endY,
               data.endZ,
               !!data.hitTarget
             );
+
+            // 3. Play distance-attenuated gunshot sound relative to local camera position
+            const localCamPos = this.fpsController.camera.position;
+            const dist = Math.hypot(startX - localCamPos.x, startY - localCamPos.y, startZ - localCamPos.z);
+            this.fpsAudio.playRemoteGunshot(dist);
           } catch (e) {
             console.warn('[ArenaEngine] Failed to add remote tracer:', e);
           }
@@ -437,14 +466,19 @@ export class ArenaEngine {
       return;
     }
 
-    // Spawn local tracer line safely
+    // Spawn local tracer line safely from weapon muzzle
     try {
-      const weaponMuzzlePos = origin.clone().addScaledVector(direction, 0.4);
-      weaponMuzzlePos.y -= 0.1;
+      this.fpsController.camera.updateMatrixWorld(true);
+      const muzzlePos = this.weaponModel.getMuzzleWorldPosition(new THREE.Vector3());
+      const hasValidMuzzle = Number.isFinite(muzzlePos.x) && Number.isFinite(muzzlePos.y) && Number.isFinite(muzzlePos.z);
+      const startX = hasValidMuzzle ? muzzlePos.x : origin.x;
+      const startY = hasValidMuzzle ? muzzlePos.y : origin.y - 0.1;
+      const startZ = hasValidMuzzle ? muzzlePos.z : origin.z;
+
       this.effectManager.addTracer(
-        weaponMuzzlePos.x,
-        weaponMuzzlePos.y,
-        weaponMuzzlePos.z,
+        startX,
+        startY,
+        startZ,
         hitPoint.x,
         hitPoint.y,
         hitPoint.z,

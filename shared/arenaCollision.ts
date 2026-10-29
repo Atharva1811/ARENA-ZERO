@@ -239,3 +239,142 @@ export function isLineOfSightClear(
 
   return true; // Clean line of sight
 }
+
+export interface ObstacleHitResult {
+  hit: boolean;
+  dist: number;
+  hitX: number;
+  hitY: number;
+  hitZ: number;
+  obstacleId?: string;
+}
+
+/**
+ * Server-authoritative raycast against all static arena obstacles (boxes, pillars, perimeter barrier).
+ * Returns the closest intersection within maxDist, or hit: false if no obstacle intersected.
+ */
+export function raycastArenaObstacles(
+  x0: number, y0: number, z0: number,
+  nx: number, ny: number, nz: number,
+  maxDist: number = 120
+): ObstacleHitResult {
+  let closestDist = maxDist;
+  let hitFound = false;
+  let closestHitX = x0 + nx * maxDist;
+  let closestHitY = y0 + ny * maxDist;
+  let closestHitZ = z0 + nz * maxDist;
+  let hitId: string | undefined = undefined;
+
+  // 1. Raycast against Cylinders in XZ
+  const horizDistSq = nx * nx + nz * nz;
+  if (horizDistSq > 0.00001) {
+    for (const cyl of ARENA_CYLINDERS) {
+      const ox = x0 - cyl.x;
+      const oz = z0 - cyl.z;
+      const a = horizDistSq;
+      const b = ox * nx + oz * nz;
+      const c = ox * ox + oz * oz - (cyl.radius * cyl.radius);
+      const disc = b * b - a * c;
+
+      if (disc >= 0) {
+        const sqrtDisc = Math.sqrt(disc);
+        const t1 = (-b - sqrtDisc) / a;
+        const t2 = (-b + sqrtDisc) / a;
+
+        const candidateT = t1 > 0.1 ? t1 : (t2 > 0.1 ? t2 : -1);
+        if (candidateT > 0.1 && candidateT < closestDist) {
+          const hitY = y0 + candidateT * ny;
+          if (hitY >= cyl.minY && hitY <= cyl.maxY) {
+            closestDist = candidateT;
+            closestHitX = x0 + candidateT * nx;
+            closestHitY = hitY;
+            closestHitZ = z0 + candidateT * nz;
+            hitFound = true;
+            hitId = cyl.id;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Raycast against Box colliders (3D Slab method)
+  for (const box of ARENA_BOXES) {
+    let tmin = 0.1;
+    let tmax = closestDist;
+
+    // X slab
+    if (Math.abs(nx) > 0.00001) {
+      let t1 = (box.minX - x0) / nx;
+      let t2 = (box.maxX - x0) / nx;
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) continue;
+    } else if (x0 < box.minX || x0 > box.maxX) {
+      continue;
+    }
+
+    // Y slab
+    if (Math.abs(ny) > 0.00001) {
+      let t1 = (box.minY - y0) / ny;
+      let t2 = (box.maxY - y0) / ny;
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) continue;
+    } else if (y0 < box.minY || y0 > box.maxY) {
+      continue;
+    }
+
+    // Z slab
+    if (Math.abs(nz) > 0.00001) {
+      let t1 = (box.minZ - z0) / nz;
+      let t2 = (box.maxZ - z0) / nz;
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) continue;
+    } else if (z0 < box.minZ || z0 > box.maxZ) {
+      continue;
+    }
+
+    // If valid intersection in front of ray origin and closer than closestDist
+    if (tmin > 0.1 && tmin < closestDist) {
+      closestDist = tmin;
+      closestHitX = x0 + tmin * nx;
+      closestHitY = y0 + tmin * ny;
+      closestHitZ = z0 + tmin * nz;
+      hitFound = true;
+      hitId = box.id;
+    }
+  }
+
+  // 3. Circular Arena Perimeter Barrier (Cylinder with radius = ARENA_RADIUS)
+  if (!hitFound && horizDistSq > 0.00001) {
+    const a = horizDistSq;
+    const b = x0 * nx + z0 * nz;
+    const c = x0 * x0 + z0 * z0 - (ARENA_RADIUS * ARENA_RADIUS);
+    const disc = b * b - a * c;
+    if (disc >= 0) {
+      const sqrtDisc = Math.sqrt(disc);
+      const t = (-b + sqrtDisc) / a;
+      if (t > 0.1 && t < closestDist) {
+        closestDist = t;
+        closestHitX = x0 + t * nx;
+        closestHitY = Math.max(0, y0 + t * ny);
+        closestHitZ = z0 + t * nz;
+        hitFound = true;
+        hitId = 'arena-perimeter';
+      }
+    }
+  }
+
+  return {
+    hit: hitFound,
+    dist: closestDist,
+    hitX: closestHitX,
+    hitY: closestHitY,
+    hitZ: closestHitZ,
+    obstacleId: hitId,
+  };
+}

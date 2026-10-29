@@ -13,6 +13,11 @@ export class RemotePlayer {
   private visorMesh!: THREE.Mesh;
   private leftArmPivot!: THREE.Group;
   private rightArmPivot!: THREE.Group;
+  private rifleGroup!: THREE.Group;
+  private muzzleSocket!: THREE.Group;
+  private muzzleFlashCore!: THREE.Mesh;
+  private muzzleFlashCross!: THREE.Mesh;
+  private muzzleLight!: THREE.PointLight;
   private leftLegPivot!: THREE.Group;
   private rightLegPivot!: THREE.Group;
   private shieldMesh!: THREE.Mesh;
@@ -36,6 +41,11 @@ export class RemotePlayer {
 
   private walkCycleTime: number = 0;
   private shieldPulseTime: number = 0;
+
+  // Firing effects and recoil animation
+  private muzzleFlashTimer: number = 0;
+  private armRecoil: number = 0;
+  private weaponKickZ: number = 0;
 
   constructor(id: string, nickname: string, colorHex: string, initialPos: { x: number; y: number; z: number; yaw: number }) {
     this.id = id;
@@ -66,14 +76,29 @@ export class RemotePlayer {
       color: 0x1e293b,
       roughness: 0.5,
       metalness: 0.6,
+      flatShading: true,
     });
     const armorTrimMat = new THREE.MeshStandardMaterial({
       color: primaryColor,
       roughness: 0.3,
       metalness: 0.8,
+      flatShading: true,
     });
     const visorMat = new THREE.MeshBasicMaterial({
       color: primaryColor,
+    });
+
+    const polymerMat = new THREE.MeshStandardMaterial({
+      color: 0x090d16,
+      roughness: 0.85,
+      metalness: 0.25,
+      flatShading: true,
+    });
+
+    const metallicMat = new THREE.MeshStandardMaterial({
+      color: 0x475569,
+      roughness: 0.3,
+      metalness: 0.85,
     });
 
     // 1. Torso (center at y = 1.05)
@@ -119,32 +144,152 @@ export class RemotePlayer {
     rightArmMesh.position.y = -0.28;
     this.rightArmPivot.add(rightArmMesh);
 
-    // Low-poly rifle attached to right arm
-    const rifleGroup = new THREE.Group();
-    const receiver = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 0.12, 0.45),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3, metalness: 0.8 })
-    );
-    receiver.position.set(0, 0, 0.1);
-    rifleGroup.add(receiver);
+    // --- Stylized Tactical Assault Carbine attached to right arm ---
+    this.rifleGroup = new THREE.Group();
 
-    const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.025, 0.025, 0.35, 8),
-      new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.9, roughness: 0.2 })
+    // Receiver chassis
+    const receiverUpper = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.08, 0.32),
+      armorDarkMat
     );
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.02, 0.45);
-    rifleGroup.add(barrel);
+    receiverUpper.position.set(0, 0.02, 0.06);
+    this.rifleGroup.add(receiverUpper);
 
-    const energyCore = new THREE.Mesh(
-      new THREE.BoxGeometry(0.09, 0.06, 0.16),
-      new THREE.MeshBasicMaterial({ color: primaryColor })
+    const receiverLower = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, 0.06, 0.22),
+      polymerMat
     );
-    energyCore.position.set(0, 0.02, 0.08);
-    rifleGroup.add(energyCore);
+    receiverLower.position.set(0, -0.04, 0.04);
+    this.rifleGroup.add(receiverLower);
 
-    rifleGroup.position.set(0, -0.45, 0.2);
-    this.rightArmPivot.add(rifleGroup);
+    // Tactical top rail
+    const railMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.04, 0.018, 0.34),
+      metallicMat
+    );
+    railMesh.position.set(0, 0.065, 0.06);
+    this.rifleGroup.add(railMesh);
+
+    // Glowing energy receiver stripe
+    const energyStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.084, 0.014, 0.18),
+      visorMat
+    );
+    energyStripe.position.set(0, 0.015, 0.06);
+    this.rifleGroup.add(energyStripe);
+
+    // Buffer tube & tactical stock extending backward (-Z relative to rifle)
+    const bufferGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.16, 8);
+    bufferGeo.rotateX(Math.PI / 2);
+    const bufferTube = new THREE.Mesh(bufferGeo, metallicMat);
+    bufferTube.position.set(0, 0.01, -0.16);
+    this.rifleGroup.add(bufferTube);
+
+    const stock = new THREE.Mesh(
+      new THREE.BoxGeometry(0.055, 0.11, 0.14),
+      polymerMat
+    );
+    stock.position.set(0, -0.02, -0.18);
+    stock.rotation.x = 0.12;
+    this.rifleGroup.add(stock);
+
+    // Vented barrel handguard extending forward (+Z)
+    const handguard = new THREE.Mesh(
+      new THREE.BoxGeometry(0.072, 0.082, 0.24),
+      armorDarkMat
+    );
+    handguard.position.set(0, 0.01, 0.30);
+    this.rifleGroup.add(handguard);
+
+    // Angled foregrip
+    const foregrip = new THREE.Mesh(
+      new THREE.BoxGeometry(0.045, 0.07, 0.05),
+      polymerMat
+    );
+    foregrip.position.set(0, -0.065, 0.30);
+    foregrip.rotation.x = -0.25;
+    this.rifleGroup.add(foregrip);
+
+    // Extended rifled barrel
+    const barrelGeo = new THREE.CylinderGeometry(0.02, 0.022, 0.30, 8);
+    barrelGeo.rotateX(Math.PI / 2);
+    const barrel = new THREE.Mesh(barrelGeo, metallicMat);
+    barrel.position.set(0, 0.01, 0.52);
+    this.rifleGroup.add(barrel);
+
+    // Slotted muzzle brake
+    const brakeGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.08, 8);
+    brakeGeo.rotateX(Math.PI / 2);
+    const brake = new THREE.Mesh(brakeGeo, metallicMat);
+    brake.position.set(0, 0.01, 0.68);
+    this.rifleGroup.add(brake);
+
+    // Curved magazine angled forward
+    const magMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.048, 0.18, 0.08),
+      polymerMat
+    );
+    magMesh.position.set(0, -0.14, 0.08);
+    magMesh.rotation.x = -0.18;
+    this.rifleGroup.add(magMesh);
+
+    // Magazine energy stripe
+    const magStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.13, 0.015),
+      visorMat
+    );
+    magStripe.position.set(0, -0.14, 0.12);
+    magStripe.rotation.x = -0.18;
+    this.rifleGroup.add(magStripe);
+
+    // Holographic sight
+    const sightBase = new THREE.Mesh(
+      new THREE.BoxGeometry(0.045, 0.04, 0.08),
+      polymerMat
+    );
+    sightBase.position.set(0, 0.09, 0.06);
+    this.rifleGroup.add(sightBase);
+
+    const sightReticle = new THREE.Mesh(
+      new THREE.RingGeometry(0.012, 0.022, 8),
+      visorMat
+    );
+    sightReticle.position.set(0, 0.11, 0.02);
+    this.rifleGroup.add(sightReticle);
+
+    // Muzzle Socket & Multi-Layer Remote Flash
+    this.muzzleSocket = new THREE.Group();
+    this.muzzleSocket.position.set(0, 0.01, 0.73);
+    this.rifleGroup.add(this.muzzleSocket);
+
+    // Flash core octahedron
+    const coreGeo = new THREE.OctahedronGeometry(0.12, 0);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0,
+    });
+    this.muzzleFlashCore = new THREE.Mesh(coreGeo, coreMat);
+    this.muzzleSocket.add(this.muzzleFlashCore);
+
+    // Flash cross starburst plane
+    const crossGeo = new THREE.BoxGeometry(0.36, 0.36, 0.01);
+    const crossMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    this.muzzleFlashCross = new THREE.Mesh(crossGeo, crossMat);
+    this.muzzleSocket.add(this.muzzleFlashCross);
+
+    // Dynamic point light for remote muzzle flash
+    this.muzzleLight = new THREE.PointLight(0x00e5ff, 0, 7);
+    this.muzzleSocket.add(this.muzzleLight);
+
+    // Mount rifle to right arm
+    this.rifleGroup.position.set(0, -0.45, 0.2);
+    this.rightArmPivot.add(this.rifleGroup);
     this.visualRoot.add(this.rightArmPivot);
 
     // 5. Left Leg Pivot (hip at y = 0.75, x = -0.16)
@@ -247,6 +392,34 @@ export class RemotePlayer {
     this.billboardTexture.needsUpdate = true;
   }
 
+  /**
+   * Queries the world-space position of this remote player's rifle muzzle.
+   */
+  public getMuzzleWorldPosition(target: THREE.Vector3 = new THREE.Vector3()): THREE.Vector3 {
+    if (this.muzzleSocket) {
+      return this.muzzleSocket.getWorldPosition(target);
+    }
+    return target.copy(this.group.position).add(new THREE.Vector3(0, 1.25, 0));
+  }
+
+  /**
+   * Triggers visual shooting feedback on this remote player:
+   * - Illuminates bright multi-layer muzzle flash & point light
+   * - Kicks the arm and weapon with snappy recoil animation
+   */
+  public triggerFire(_endX?: number, _endY?: number, _endZ?: number, _hitTarget: boolean = false) {
+    this.muzzleFlashTimer = 0.06;
+    this.armRecoil = 0.22;
+    this.weaponKickZ = 0.06;
+
+    if (this.muzzleFlashCore && this.muzzleFlashCross && this.muzzleLight) {
+      (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 1.0;
+      (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0.95;
+      this.muzzleFlashCross.rotation.z = Math.random() * Math.PI;
+      this.muzzleLight.intensity = 4.2;
+    }
+  }
+
   public syncState(state: any) {
     if (!state) return;
 
@@ -300,28 +473,51 @@ export class RemotePlayer {
     }
     this.group.visible = true;
 
-    // 4. Smooth aim pitch tracking (tilt head and weapon arm)
+    // 4. Muzzle flash decay
+    if (this.muzzleFlashTimer > 0) {
+      this.muzzleFlashTimer -= dt;
+      if (this.muzzleFlashTimer <= 0) {
+        if (this.muzzleFlashCore && this.muzzleFlashCross && this.muzzleLight) {
+          (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 0;
+          (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0;
+          this.muzzleLight.intensity = 0;
+        }
+      }
+    }
+
+    // 5. Recoil recovery
+    this.armRecoil = Math.max(0, this.armRecoil - dt * 1.8);
+    this.weaponKickZ = Math.max(0, this.weaponKickZ - dt * 0.6);
+
+    // 6. Smooth aim pitch tracking (tilt head and weapon arm)
     this.currentPitch = THREE.MathUtils.lerp(this.currentPitch, this.targetPitch, Math.min(1, dt * 15));
     this.headMesh.rotation.x = -this.currentPitch * 0.75;
 
-    // 5. Walk cycle animation when moving
+    // 7. Walk cycle animation when moving
     if (this.isMoving) {
       this.walkCycleTime += dt * 10;
       const swing = Math.sin(this.walkCycleTime) * 0.45;
       this.leftLegPivot.rotation.x = swing;
       this.rightLegPivot.rotation.x = -swing;
       this.leftArmPivot.rotation.x = -swing * 0.7;
-      // Right arm holds rifle steady with pitch offset
-      this.rightArmPivot.rotation.x = -Math.PI / 4 - this.currentPitch * 0.45 + Math.cos(this.walkCycleTime) * 0.05;
+      // Right arm holds rifle steady with pitch offset and firing recoil climb
+      this.rightArmPivot.rotation.x = -Math.PI / 4 - this.currentPitch * 0.45 + Math.cos(this.walkCycleTime) * 0.05 - this.armRecoil;
     } else {
       // Idle pose
       this.leftLegPivot.rotation.x = THREE.MathUtils.lerp(this.leftLegPivot.rotation.x, 0, dt * 10);
       this.rightLegPivot.rotation.x = THREE.MathUtils.lerp(this.rightLegPivot.rotation.x, 0, dt * 10);
       this.leftArmPivot.rotation.x = THREE.MathUtils.lerp(this.leftArmPivot.rotation.x, 0, dt * 10);
-      this.rightArmPivot.rotation.x = THREE.MathUtils.lerp(this.rightArmPivot.rotation.x, -Math.PI / 4 - this.currentPitch * 0.45, dt * 10);
+      this.rightArmPivot.rotation.x = THREE.MathUtils.lerp(
+        this.rightArmPivot.rotation.x,
+        -Math.PI / 4 - this.currentPitch * 0.45 - this.armRecoil,
+        dt * 15
+      );
     }
 
-    // 6. Shield bubble animation
+    // Weapon mechanical kick
+    this.rifleGroup.position.z = 0.2 - this.weaponKickZ;
+
+    // 8. Shield bubble animation
     if (this.isShielded) {
       this.shieldMesh.visible = true;
       this.shieldPulseTime += dt * 4;

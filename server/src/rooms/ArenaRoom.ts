@@ -6,6 +6,7 @@ import { PlayerState } from './schema/PlayerState.js';
 import { GAME_CONSTANTS } from '../../../shared/constants.js';
 import {
   isLineOfSightClear,
+  raycastArenaObstacles,
   resolveArenaCollision,
   SPAWN_POINTS,
 } from '../../../shared/arenaCollision.js';
@@ -532,6 +533,28 @@ export class ArenaRoom extends Room<ArenaState> {
       });
     } catch (hitscanErr) {
       console.error('[ArenaRoom] Hitscan resolution error:', hitscanErr);
+    }
+
+    // If no player was hit, raycast against static arena obstacles so misses clip to walls & barriers
+    if (!hitSomething) {
+      try {
+        const obsHit = raycastArenaObstacles(
+          data.originX,
+          data.originY,
+          data.originZ,
+          nx,
+          ny,
+          nz,
+          maxRange
+        );
+        if (obsHit.hit) {
+          hitX = obsHit.hitX;
+          hitY = obsHit.hitY;
+          hitZ = obsHit.hitZ;
+        }
+      } catch (obsErr) {
+        console.error('[ArenaRoom] Obstacle raycast error:', obsErr);
+      }
     }
 
     // 8. Broadcast weapon tracer to all players
