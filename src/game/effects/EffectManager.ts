@@ -18,10 +18,30 @@ export class EffectManager {
   private tracers: ActiveTracer[] = [];
   private sparks: SparkParticle[] = [];
 
+  // Pooled spark meshes for zero-garbage particle management
+  private sparkPool: THREE.Mesh[] = [];
+  private sharedSparkGeo: THREE.BoxGeometry;
+  private redSparkMat: THREE.MeshBasicMaterial;
+  private cyanSparkMat: THREE.MeshBasicMaterial;
+
   private upVector = new THREE.Vector3(0, 1, 0);
+  private readonly MAX_ACTIVE_SPARKS = 48;
+  private readonly MAX_ACTIVE_TRACERS = 16;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+
+    this.sharedSparkGeo = new THREE.BoxGeometry(0.045, 0.045, 0.045);
+    this.redSparkMat = new THREE.MeshBasicMaterial({
+      color: 0xff0044,
+      transparent: true,
+      opacity: 1,
+    });
+    this.cyanSparkMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 1,
+    });
   }
 
   public addTracer(
@@ -33,6 +53,16 @@ export class EffectManager {
     endZ: number,
     hitTarget: boolean = false
   ) {
+    // If tracer buffer is full, remove oldest to prevent unbounded memory growth
+    if (this.tracers.length >= this.MAX_ACTIVE_TRACERS) {
+      const oldest = this.tracers.shift();
+      if (oldest) {
+        this.scene.remove(oldest.mesh);
+        oldest.mesh.geometry.dispose();
+        (oldest.mesh.material as THREE.Material).dispose();
+      }
+    }
+
     const start = new THREE.Vector3(startX, startY, startZ);
     const end = new THREE.Vector3(endX, endY, endZ);
     const dir = new THREE.Vector3().subVectors(end, start);
@@ -54,7 +84,7 @@ export class EffectManager {
     const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
     mesh.position.copy(mid);
 
-    // Orient cylinder (default along Y) towards direction
+    // Orient cylinder towards shot direction
     const quat = new THREE.Quaternion().setFromUnitVectors(this.upVector, dir.clone().normalize());
     mesh.quaternion.copy(quat);
 
@@ -66,38 +96,44 @@ export class EffectManager {
   }
 
   public addImpactSparks(position: THREE.Vector3, hitTarget: boolean) {
-    const sparkCount = hitTarget ? 10 : 6;
-    const sparkColor = hitTarget ? 0xff0044 : 0x38bdf8;
-
-    const sparkGeo = new THREE.BoxGeometry(0.04, 0.04, 0.04);
-    const sparkMat = new THREE.MeshBasicMaterial({
-      color: sparkColor,
-      transparent: true,
-      opacity: 1,
-    });
+    const sparkCount = hitTarget ? 8 : 5;
 
     for (let i = 0; i < sparkCount; i++) {
-      const mesh = new THREE.Mesh(sparkGeo, sparkMat.clone());
+      if (this.sparks.length >= this.MAX_ACTIVE_SPARKS) {
+        break; // Cap active sparks to maintain smooth 60 FPS
+      }
+
+      let mesh = this.sparkPool.pop();
+      if (!mesh) {
+        mesh = new THREE.Mesh(this.sharedSparkGeo, hitTarget ? this.redSparkMat.clone() : this.cyanSparkMat.clone());
+      } else {
+        mesh.material = hitTarget ? this.redSparkMat.clone() : this.cyanSparkMat.clone();
+        (mesh.material as THREE.MeshBasicMaterial).opacity = 1;
+        mesh.visible = true;
+      }
+
       mesh.position.copy(position);
+      if (!mesh.parent) {
+        this.scene.add(mesh);
+      }
 
       const vel = new THREE.Vector3(
-        (Math.random() - 0.5) * 5,
-        Math.random() * 4 + 1,
-        (Math.random() - 0.5) * 5
+        (Math.random() - 0.5) * 4.5,
+        Math.random() * 3.5 + 1.2,
+        (Math.random() - 0.5) * 4.5
       );
 
-      this.scene.add(mesh);
       this.sparks.push({
         mesh,
         velocity: vel,
-        life: 0.25,
-        maxLife: 0.25,
+        life: 0.22,
+        maxLife: 0.22,
       });
     }
   }
 
   public update(dt: number) {
-    // 1. Update tracers
+    // 1. Update active tracers
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const t = this.tracers[i];
       t.life -= dt;
@@ -112,20 +148,19 @@ export class EffectManager {
       }
     }
 
-    // 2. Update sparks
+    // 2. Update active sparks with gravity and recycle into pool
     for (let i = this.sparks.length - 1; i >= 0; i--) {
       const s = this.sparks[i];
       s.life -= dt;
       if (s.life <= 0) {
-        this.scene.remove(s.mesh);
-        s.mesh.geometry.dispose();
-        (s.mesh.material as THREE.Material).dispose();
+        s.mesh.visible = false;
+        this.sparkPool.push(s.mesh);
         this.sparks.splice(i, 1);
       } else {
-        s.velocity.y -= 12 * dt; // gravity
+        s.velocity.y -= 11 * dt; // gravity
         s.mesh.position.addScaledVector(s.velocity, dt);
         const mat = s.mesh.material as THREE.MeshBasicMaterial;
-        mat.opacity = s.life / s.maxLife;
+        mat.opacity = Math.max(0, s.life / s.maxLife);
       }
     }
   }
@@ -133,16 +168,25 @@ export class EffectManager {
   public dispose() {
     this.tracers.forEach((t) => {
       this.scene.remove(t.mesh);
-      t.mesh.geometry.dispose();
-      (t.mesh.material as THREE.Material).dispose();
+      t.mesh.geometry?.dispose();
+      (t.mesh.material as THREE.Material)?.dispose();
     });
     this.tracers = [];
 
     this.sparks.forEach((s) => {
       this.scene.remove(s.mesh);
-      s.mesh.geometry.dispose();
-      (s.mesh.material as THREE.Material).dispose();
+      if (s.mesh.material) (s.mesh.material as THREE.Material).dispose();
     });
     this.sparks = [];
+
+    this.sparkPool.forEach((m) => {
+      this.scene.remove(m);
+      if (m.material) (m.material as THREE.Material).dispose();
+    });
+    this.sparkPool = [];
+
+    this.sharedSparkGeo.dispose();
+    this.redSparkMat.dispose();
+    this.cyanSparkMat.dispose();
   }
 }

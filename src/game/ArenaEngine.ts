@@ -63,6 +63,7 @@ export class ArenaEngine {
   private clock = new THREE.Clock();
   private isDisposed: boolean = false;
   private hasInitialServerSpawn: boolean = false;
+  private processedShotIds = new Set<string>();
 
   constructor(container: HTMLElement, colyseus: ColyseusManager, callbacks: EngineCallbacks = {}) {
     this.container = container;
@@ -193,6 +194,16 @@ export class ArenaEngine {
     this.colyseus.onWeaponTracer = (data) => {
       if (!data || this.isDisposed) return;
       if (data.shooterId !== this.colyseus.mySessionId) {
+        // Prevent duplicate processing of the same shot event
+        if (data.shotId) {
+          if (this.processedShotIds.has(data.shotId)) return;
+          this.processedShotIds.add(data.shotId);
+          if (this.processedShotIds.size > 120) {
+            const oldest = this.processedShotIds.values().next().value;
+            if (oldest) this.processedShotIds.delete(oldest);
+          }
+        }
+
         if (
           Number.isFinite(data.startX) &&
           Number.isFinite(data.startY) &&

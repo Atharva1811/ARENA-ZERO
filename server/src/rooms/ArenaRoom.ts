@@ -559,7 +559,9 @@ export class ArenaRoom extends Room<ArenaState> {
 
     // 8. Broadcast weapon tracer to all players
     try {
+      const shotId = `shot_${client.sessionId}_${now}_${shooter.ammo}`;
       const tracerEvent: WeaponTracerEvent = {
+        shotId,
         shooterId: client.sessionId,
         startX: Number.isFinite(data.originX) ? data.originX : shooter.x,
         startY: Number.isFinite(data.originY) ? data.originY : shooter.y + GAME_CONSTANTS.EYE_HEIGHT,
@@ -568,6 +570,8 @@ export class ArenaRoom extends Room<ArenaState> {
         endY: Number.isFinite(hitY) ? hitY : data.originY,
         endZ: Number.isFinite(hitZ) ? hitZ : data.originZ,
         hitTarget: hitSomething,
+        targetId: hitTargetSessionId || null,
+        timestamp: now,
       };
       this.broadcast('weapon_tracer', tracerEvent);
     } catch (tracerErr) {

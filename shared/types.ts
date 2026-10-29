@@ -52,6 +52,7 @@ export interface KillFeedItem {
 }
 
 export interface WeaponTracerEvent {
+  shotId?: string;
   shooterId: string;
   startX: number;
   startY: number;
@@ -60,6 +61,8 @@ export interface WeaponTracerEvent {
   endY: number;
   endZ: number;
   hitTarget: boolean;
+  targetId?: string | null;
+  timestamp?: number;
 }
 
 export interface MatchWinnerPayload {
