@@ -43,8 +43,12 @@ export const App: React.FC = () => {
   // HUD stats
   const [health, setHealth] = useState<number>(100);
   const [maxHealth] = useState<number>(100);
-  const [ammo, setAmmo] = useState<number>(24);
-  const [maxAmmo] = useState<number>(24);
+  const [stamina, setStamina] = useState<number>(GAME_CONSTANTS.MAX_STAMINA);
+  const [maxStamina] = useState<number>(GAME_CONSTANTS.MAX_STAMINA);
+  const [ammo, setAmmo] = useState<number>(GAME_CONSTANTS.MAGAZINE_SIZE);
+  const [maxAmmo] = useState<number>(GAME_CONSTANTS.MAGAZINE_SIZE);
+  const [reserveAmmo, setReserveAmmo] = useState<number>(GAME_CONSTANTS.MAX_RESERVE_AMMO);
+  const [fireMode, setFireMode] = useState<'SINGLE' | 'AUTO'>('AUTO');
   const [isReloading, setIsReloading] = useState<boolean>(false);
   const [matchTime, setMatchTime] = useState<number>(600);
   const [killFeed, setKillFeed] = useState<KillFeedItem[]>([]);
@@ -87,6 +91,9 @@ export const App: React.FC = () => {
     setMatchWinner(null);
     setIsScoreboardOpen(false);
     setPlayers([]);
+    setStamina(GAME_CONSTANTS.MAX_STAMINA);
+    setReserveAmmo(GAME_CONSTANTS.MAX_RESERVE_AMMO);
+    setFireMode('AUTO');
   }, []);
 
   // Setup connection error & matchmaking callbacks
@@ -166,8 +173,17 @@ export const App: React.FC = () => {
         setAmmo(currAmmo);
         setIsReloading(currAmmo === maxA ? false : engineRef.current?.isReloading ?? false);
       },
+      onReserveAmmoChange: (currReserve) => {
+        setReserveAmmo(currReserve);
+      },
       onHealthChange: (currHp) => {
         setHealth(currHp);
+      },
+      onStaminaChange: (currStamina) => {
+        setStamina(currStamina);
+      },
+      onFireModeChange: (mode) => {
+        setFireMode(mode);
       },
       onCrosshairHit: (headshot) => {
         setIsHeadshotHit(headshot);
@@ -341,6 +357,10 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleToggleFireMode = useCallback(() => {
+    engineRef.current?.toggleFireMode();
+  }, []);
+
   return (
     <div className="arena-app-container">
       {/* 3D WebGL Canvas Viewport */}
@@ -372,8 +392,13 @@ export const App: React.FC = () => {
         <FPSHUD
           health={health}
           maxHealth={maxHealth}
+          stamina={stamina}
+          maxStamina={maxStamina}
           ammo={ammo}
           maxAmmo={maxAmmo}
+          reserveAmmo={reserveAmmo}
+          fireMode={fireMode}
+          onToggleFireMode={handleToggleFireMode}
           isReloading={isReloading}
           matchTimeSeconds={matchTime}
           roomCode={roomCode}

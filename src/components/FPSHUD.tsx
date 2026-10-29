@@ -1,12 +1,17 @@
 import React, { useState } from 'react';
-import { Crosshair, Shield, Clock, Copy, Check, Skull } from 'lucide-react';
+import { Crosshair, Shield, Clock, Copy, Check, Skull, Zap } from 'lucide-react';
 import type { KillFeedItem } from '../../shared/types';
 
 interface FPSHUDProps {
   health: number;
   maxHealth: number;
+  stamina?: number;
+  maxStamina?: number;
   ammo: number;
   maxAmmo: number;
+  reserveAmmo?: number;
+  fireMode?: 'SINGLE' | 'AUTO';
+  onToggleFireMode?: () => void;
   isReloading: boolean;
   matchTimeSeconds: number;
   roomCode?: string;
@@ -23,8 +28,13 @@ interface FPSHUDProps {
 export const FPSHUD: React.FC<FPSHUDProps> = ({
   health,
   maxHealth,
+  stamina = 100,
+  maxStamina = 100,
   ammo,
   maxAmmo,
+  reserveAmmo = 72,
+  fireMode = 'AUTO',
+  onToggleFireMode,
   isReloading,
   matchTimeSeconds,
   roomCode,
@@ -54,6 +64,7 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
   };
 
   const healthPct = Math.max(0, Math.min(100, (health / maxHealth) * 100));
+  const staminaPct = Math.max(0, Math.min(100, (stamina / maxStamina) * 100));
 
   return (
     <div className="fps-hud-root">
@@ -132,9 +143,9 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
         </div>
       )}
 
-      {/* 6. Bottom Combat Dashboard (Health & Ammo) */}
+      {/* 6. Bottom Combat Dashboard (Health, Stamina & Ammo) */}
       <footer className="hud-bottom-bar">
-        {/* Health Plate (Bottom Left) */}
+        {/* Health Plate & Tactical Stamina (Bottom Left) */}
         <div className="hud-health-card">
           <div className="health-header">
             <div className="health-icon-group">
@@ -152,19 +163,50 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
               style={{ width: `${healthPct}%` }}
             />
           </div>
+
+          {/* Tactical Stamina Track */}
+          <div className="stamina-track-group">
+            <div className="stamina-header">
+              <div className="stamina-icon-group">
+                <Zap size={14} className="stamina-icon" />
+                <span className="label">TACTICAL STAMINA</span>
+              </div>
+              <span className={`stamina-digits ${stamina < 20 ? 'critical' : ''}`}>
+                {Math.round(stamina)} <span className="max-stamina">/ {maxStamina}</span>
+              </span>
+            </div>
+            <div className="stamina-track">
+              <div
+                className={`stamina-fill ${stamina < 20 ? 'critical' : stamina < 50 ? 'warning' : 'healthy'}`}
+                style={{ width: `${staminaPct}%` }}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Ammunition Counter (Bottom Right) */}
         <div className="hud-ammo-card">
           <div className="ammo-header">
             <span className="ammo-weapon-name">PULSE RIFLE MK-IV</span>
-            <span className="ammo-status-tag">{isReloading ? 'RELOADING...' : 'CHARGED'}</span>
+            <div className="ammo-header-right">
+              <button
+                type="button"
+                className={`fire-mode-badge ${fireMode.toLowerCase()}`}
+                onClick={onToggleFireMode}
+                title="Press [B] or click to switch firing mode"
+              >
+                <span className="fire-mode-text">MODE: {fireMode}</span>
+                <span className="fire-mode-key">[B]</span>
+              </button>
+              <span className="ammo-status-tag">{isReloading ? 'RELOADING...' : 'CHARGED'}</span>
+            </div>
           </div>
 
           <div className="ammo-display">
             <div className="ammo-count">
               <span className={`current-rounds ${ammo <= 6 ? 'ammo-low' : ''}`}>{ammo}</span>
               <span className="capacity"> / {maxAmmo}</span>
+              <span className="reserve-ammo-count"> [{reserveAmmo}]</span>
             </div>
 
             {/* Visual bullet cell indicators */}
@@ -177,8 +219,11 @@ export const FPSHUD: React.FC<FPSHUDProps> = ({
               ))}
             </div>
           </div>
-          {ammo === 0 && !isReloading && (
-            <div className="reload-prompt-chip">PRESS [R] TO RELOAD</div>
+          {ammo === 0 && !isReloading && reserveAmmo > 0 && (
+            <div className="reload-prompt-chip">RELOADING...</div>
+          )}
+          {ammo === 0 && !isReloading && reserveAmmo === 0 && (
+            <div className="reload-prompt-chip ammo-empty">OUT OF AMMO</div>
           )}
         </div>
       </footer>

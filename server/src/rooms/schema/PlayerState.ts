@@ -14,10 +14,14 @@ export class PlayerState extends Schema {
 
   @type('number') health: number = 100;
   @type('number') maxHealth: number = 100;
+  @type('number') stamina: number = 100;
+  @type('number') maxStamina: number = 100;
   @type('number') score: number = 0;
   @type('number') kills: number = 0;
   @type('number') deaths: number = 0;
   @type('number') ammo: number = 24;
+  @type('number') reserveAmmo: number = 72;
+  @type('string') fireMode: string = 'AUTO';
 
   @type('boolean') isMoving: boolean = false;
   @type('boolean') isSprinting: boolean = false;
@@ -32,6 +36,7 @@ export class PlayerState extends Schema {
   spawnZ: number = 0;
   lastShootTime: number = 0;
   lastMoveTime: number = 0;
+  lastSprintTime: number = 0;
   shieldExpiryTime: number = 0;
   respawnTime: number = 0;
   lastDamageTime: number = 0;

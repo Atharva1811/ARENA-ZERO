@@ -1,3 +1,5 @@
+export type FireMode = 'SINGLE' | 'AUTO';
+
 export interface JoinRoomOptions {
   nickname: string;
   roomCode?: string;

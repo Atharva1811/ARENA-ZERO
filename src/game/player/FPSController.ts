@@ -15,6 +15,12 @@ export class FPSController {
   public isGrounded: boolean = true;
   private velocityY: number = 0;
 
+  // Tactical Stamina
+  public stamina: number = GAME_CONSTANTS.MAX_STAMINA;
+  public maxStamina: number = GAME_CONSTANTS.MAX_STAMINA;
+  private lastSprintTime: number = 0;
+  public onStaminaChange?: (stamina: number, maxStamina: number) => void;
+
   public isPointerLocked: boolean = false;
   public sensitivity: number = 0.0022;
   public invertY: boolean = false;
@@ -170,6 +176,10 @@ export class FPSController {
     }
     this.velocityY = 0;
     this.isGrounded = true;
+    this.stamina = GAME_CONSTANTS.MAX_STAMINA;
+    this.isSprinting = false;
+    this.lastSprintTime = 0;
+    this.onStaminaChange?.(this.stamina, this.maxStamina);
   }
 
   public update(delta: number, isGameActive: boolean) {
@@ -193,7 +203,36 @@ export class FPSController {
 
       const hasMove = inF !== 0 || inR !== 0;
       this.isMoving = hasMove;
-      this.isSprinting = this.inputState.sprint && this.inputState.forward && !this.inputState.backward;
+
+      // Tactical Stamina & Sprint Evaluation
+      const wantsSprint = this.inputState.sprint && this.inputState.forward && !this.inputState.backward && hasMove;
+
+      if (wantsSprint) {
+        if (this.isSprinting) {
+          // Drain stamina while sprinting continuously
+          this.stamina = Math.max(0, this.stamina - GAME_CONSTANTS.SPRINT_STAMINA_DRAIN_PER_SECOND * dt);
+          this.lastSprintTime = performance.now();
+          if (this.stamina <= 0) {
+            this.isSprinting = false;
+          }
+        } else if (this.stamina >= GAME_CONSTANTS.MIN_STAMINA_TO_SPRINT) {
+          // Can only initiate sprint if above minimum threshold (10%)
+          this.isSprinting = true;
+          this.stamina = Math.max(0, this.stamina - GAME_CONSTANTS.SPRINT_STAMINA_DRAIN_PER_SECOND * dt);
+          this.lastSprintTime = performance.now();
+        } else {
+          this.isSprinting = false;
+        }
+      } else {
+        this.isSprinting = false;
+        // Gradual stamina regeneration after configured delay
+        const now = performance.now();
+        if (now - this.lastSprintTime >= GAME_CONSTANTS.STAMINA_REGEN_DELAY_MS) {
+          this.stamina = Math.min(this.maxStamina, this.stamina + GAME_CONSTANTS.STAMINA_REGEN_PER_SECOND * dt);
+        }
+      }
+
+      this.onStaminaChange?.(this.stamina, this.maxStamina);
 
       if (hasMove) {
         const len = Math.hypot(inF, inR);

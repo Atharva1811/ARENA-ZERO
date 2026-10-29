@@ -23,7 +23,10 @@ export interface PlayerScoreEntry {
 
 export interface EngineCallbacks {
   onAmmoChange?: (ammo: number, maxAmmo: number) => void;
+  onReserveAmmoChange?: (reserveAmmo: number) => void;
   onHealthChange?: (health: number, maxHealth: number) => void;
+  onStaminaChange?: (stamina: number, maxStamina: number) => void;
+  onFireModeChange?: (fireMode: 'SINGLE' | 'AUTO') => void;
   onCrosshairHit?: (headshot: boolean) => void;
   onDamageReceived?: () => void;
   onKillFeed?: (item: KillFeedItem) => void;
@@ -56,9 +59,14 @@ export class ArenaEngine {
   public isReloading: boolean = false;
   public ammo: number = GAME_CONSTANTS.MAGAZINE_SIZE;
   public maxAmmo: number = GAME_CONSTANTS.MAGAZINE_SIZE;
+  public reserveAmmo: number = GAME_CONSTANTS.MAX_RESERVE_AMMO;
   public health: number = GAME_CONSTANTS.MAX_HEALTH;
   public maxHealth: number = GAME_CONSTANTS.MAX_HEALTH;
+  public fireMode: 'SINGLE' | 'AUTO' = 'AUTO';
 
+  private isTriggerHeld: boolean = false;
+  private autoFireIntervalId: ReturnType<typeof setInterval> | null = null;
+  private singleFiredThisPress: boolean = false;
   private lastFireTime: number = 0;
   private animationFrameId: number | null = null;
   private clock = new THREE.Clock();
@@ -143,9 +151,17 @@ export class ArenaEngine {
     // 9. Resize Listener
     window.addEventListener('resize', this.onWindowResize);
 
-    // Initial HUD notification
+    // Hook tactical stamina change callback
+    this.fpsController.onStaminaChange = (stamina, maxStamina) => {
+      this.callbacks.onStaminaChange?.(stamina, maxStamina);
+    };
+
+    // Initial HUD notifications
     this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+    this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
     this.callbacks.onHealthChange?.(this.health, this.maxHealth);
+    this.callbacks.onStaminaChange?.(this.fpsController.stamina, this.fpsController.maxStamina);
+    this.callbacks.onFireModeChange?.(this.fireMode);
 
     // 10. Start Loop
     this.animate();
@@ -366,11 +382,20 @@ export class ArenaEngine {
             // Player respawned via server state sync
             this.health = player.health;
             this.ammo = player.ammo;
+            this.reserveAmmo = typeof player.reserveAmmo === 'number' ? player.reserveAmmo : GAME_CONSTANTS.MAX_RESERVE_AMMO;
             this.isReloading = false;
+            this.isTriggerHeld = false;
+            this.singleFiredThisPress = false;
+            this.stopAutoFire();
             this.callbacks.onHealthChange?.(this.health, this.maxHealth);
             this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+            this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
             this.callbacks.onPlayerRespawn?.();
           } else {
+            this.stopAutoFire();
+            this.isTriggerHeld = false;
+            this.singleFiredThisPress = false;
+            this.isReloading = false;
             this.fpsController.exitPointerLock();
             this.callbacks.onPlayerDeath?.('Opponent');
           }
@@ -409,10 +434,17 @@ export class ArenaEngine {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('mouseup', this.onMouseUp);
+    window.addEventListener('blur', this.onBlur);
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.isDisposed) return;
+
+    if (e.code === 'KeyB') {
+      this.toggleFireMode();
+      return;
+    }
 
     if (e.code === 'KeyR') {
       this.reloadWeapon();
@@ -427,6 +459,37 @@ export class ArenaEngine {
     this.fpsController.handleKeyUp(e.code);
   };
 
+  public toggleFireMode() {
+    this.fireMode = this.fireMode === 'AUTO' ? 'SINGLE' : 'AUTO';
+    if (this.fireMode === 'SINGLE') {
+      this.stopAutoFire();
+    }
+    this.callbacks.onFireModeChange?.(this.fireMode);
+    this.colyseus.sendToggleFireMode(this.fireMode);
+  }
+
+  private startAutoFire() {
+    this.stopAutoFire();
+    this.autoFireIntervalId = setInterval(() => {
+      if (this.isDisposed || !this.isAlive || !this.isTriggerHeld || this.fireMode !== 'AUTO') {
+        this.stopAutoFire();
+        return;
+      }
+      if (this.isReloading) {
+        this.stopAutoFire();
+        return;
+      }
+      this.fireWeapon();
+    }, GAME_CONSTANTS.FIRE_RATE_MS);
+  }
+
+  private stopAutoFire() {
+    if (this.autoFireIntervalId !== null) {
+      clearInterval(this.autoFireIntervalId);
+      this.autoFireIntervalId = null;
+    }
+  }
+
   private onMouseDown = (e: MouseEvent) => {
     if (this.isDisposed) return;
 
@@ -437,8 +500,32 @@ export class ArenaEngine {
         return;
       }
 
-      this.fireWeapon();
+      this.isTriggerHeld = true;
+      if (this.fireMode === 'SINGLE') {
+        if (!this.singleFiredThisPress) {
+          this.singleFiredThisPress = true;
+          this.fireWeapon();
+        }
+      } else {
+        // AUTO mode
+        this.fireWeapon();
+        this.startAutoFire();
+      }
     }
+  };
+
+  private onMouseUp = (e: MouseEvent) => {
+    if (e.button === 0) {
+      this.isTriggerHeld = false;
+      this.singleFiredThisPress = false;
+      this.stopAutoFire();
+    }
+  };
+
+  private onBlur = () => {
+    this.isTriggerHeld = false;
+    this.singleFiredThisPress = false;
+    this.stopAutoFire();
   };
 
   public fireWeapon() {
@@ -449,6 +536,9 @@ export class ArenaEngine {
 
     if (this.ammo <= 0) {
       this.fpsAudio.playEmptyClick();
+      if (this.reserveAmmo > 0) {
+        this.reloadWeapon();
+      }
       return;
     }
 
@@ -459,7 +549,10 @@ export class ArenaEngine {
     this.ammo--;
     this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
     if (this.ammo === 0) {
-      this.reloadWeapon();
+      this.stopAutoFire();
+      if (this.reserveAmmo > 0) {
+        this.reloadWeapon();
+      }
     }
 
     // Audio and weapon viewmodel recoil
@@ -574,18 +667,29 @@ export class ArenaEngine {
   }
 
   public reloadWeapon() {
-    if (this.ammo >= this.maxAmmo || this.isReloading || !this.isAlive) return;
+    if (this.ammo >= this.maxAmmo || this.isReloading || !this.isAlive || this.reserveAmmo <= 0) return;
 
     this.isReloading = true;
+    this.stopAutoFire();
     this.fpsAudio.playReload();
     this.weaponModel.startReload(GAME_CONSTANTS.RELOAD_TIME_MS / 1000);
     this.colyseus.sendReload();
 
     setTimeout(() => {
       if (!this.isDisposed && this.isAlive) {
-        this.ammo = this.maxAmmo;
+        const needed = this.maxAmmo - this.ammo;
+        const toLoad = Math.min(needed, this.reserveAmmo);
+        this.ammo += toLoad;
+        this.reserveAmmo -= toLoad;
         this.isReloading = false;
         this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+        this.callbacks.onReserveAmmoChange?.(this.reserveAmmo);
+
+        // In AUTO mode: if trigger is still held when reload completes, resume firing immediately
+        if (this.isTriggerHeld && this.fireMode === 'AUTO' && this.ammo > 0) {
+          this.fireWeapon();
+          this.startAutoFire();
+        }
       }
     }, GAME_CONSTANTS.RELOAD_TIME_MS);
   }
@@ -657,10 +761,16 @@ export class ArenaEngine {
       cancelAnimationFrame(this.animationFrameId);
     }
 
+    this.stopAutoFire();
+    this.isTriggerHeld = false;
+    this.singleFiredThisPress = false;
+
     window.removeEventListener('resize', this.onWindowResize);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('blur', this.onBlur);
 
     this.fpsController.dispose();
     this.weaponModel.dispose();

@@ -212,6 +212,20 @@ export class ArenaRoom extends Room<ArenaState> {
       }
     });
 
+    this.onMessage('toggle_fire_mode', (client, data: { mode?: string }) => {
+      try {
+        const player = this.state.players.get(client.sessionId);
+        if (!player || !player.isAlive) return;
+        if (data?.mode === 'SINGLE' || data?.mode === 'AUTO') {
+          player.fireMode = data.mode;
+        } else {
+          player.fireMode = player.fireMode === 'AUTO' ? 'SINGLE' : 'AUTO';
+        }
+      } catch (err: any) {
+        console.error(`[ArenaRoom] Error in toggle_fire_mode (client: ${client.sessionId}):`, err);
+      }
+    });
+
     // Match countdown timer (every 1 sec)
     this.matchTimerInterval = setInterval(() => {
       if (this.state.status === 'active') {
@@ -435,7 +449,19 @@ export class ArenaRoom extends Room<ArenaState> {
     player.yaw = data.yaw;
     player.pitch = Math.max(-1.5, Math.min(1.5, Number.isFinite(data.pitch) ? data.pitch : 0));
     player.isMoving = !!data.isMoving;
-    player.isSprinting = !!data.isSprinting;
+
+    // Server-authoritative sprint validation based on stamina
+    if (data.isSprinting && player.isAlive && player.isMoving) {
+      if (player.stamina <= 0) {
+        player.isSprinting = false;
+      } else if (!player.isSprinting && player.stamina < GAME_CONSTANTS.MIN_STAMINA_TO_SPRINT) {
+        player.isSprinting = false;
+      } else {
+        player.isSprinting = true;
+      }
+    } else {
+      player.isSprinting = false;
+    }
   }
 
   private handlePlayerFire(client: Client, data: FireWeaponPayload) {
@@ -515,6 +541,13 @@ export class ArenaRoom extends Room<ArenaState> {
     shooter.ammo = Math.max(0, shooter.ammo - 1);
     shooter.isFiring = true;
     shooter.isShielded = false; // Firing removes spawn protection
+
+    // Automatic reload when magazine is emptied and reserve ammo is available
+    if (shooter.ammo === 0 && shooter.reserveAmmo > 0 && !shooter.isReloadingInternal) {
+      shooter.isReloading = true;
+      shooter.isReloadingInternal = true;
+      shooter.reloadExpiryTime = now + GAME_CONSTANTS.RELOAD_TIME_MS;
+    }
 
     console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} shooterId=${client.sessionId} ammoRemaining=${shooter.ammo} validation=PASSED`);
 
@@ -728,7 +761,7 @@ export class ArenaRoom extends Room<ArenaState> {
 
   private handlePlayerReload(client: Client) {
     const player = this.state.players.get(client.sessionId);
-    if (!player || !player.isAlive || player.isReloadingInternal || player.ammo === GAME_CONSTANTS.MAGAZINE_SIZE) {
+    if (!player || !player.isAlive || player.isReloadingInternal || player.ammo >= GAME_CONSTANTS.MAGAZINE_SIZE || player.reserveAmmo <= 0) {
       return;
     }
 
@@ -752,11 +785,16 @@ export class ArenaRoom extends Room<ArenaState> {
     player.health = GAME_CONSTANTS.MAX_HEALTH;
     player.maxHealth = GAME_CONSTANTS.MAX_HEALTH;
     player.ammo = GAME_CONSTANTS.MAGAZINE_SIZE;
+    player.reserveAmmo = GAME_CONSTANTS.MAX_RESERVE_AMMO;
+    player.stamina = GAME_CONSTANTS.MAX_STAMINA;
+    player.maxStamina = GAME_CONSTANTS.MAX_STAMINA;
+    player.isSprinting = false;
     player.isAlive = true;
     player.isReloading = false;
     player.isReloadingInternal = false;
     player.respawnTime = 0;
     player.lastDamageTime = now; // Reset armour regen delay timer
+    player.lastSprintTime = 0;
 
     // Grant temporary spawn protection shield
     player.isShielded = true;
@@ -835,13 +873,35 @@ export class ArenaRoom extends Room<ArenaState> {
         }
       }
 
+      // 2b. Tactical Stamina Simulation
+      if (player.isAlive) {
+        const dtSeconds = Math.max(0.001, Math.min(0.2, (deltaTime || 50) / 1000));
+        if (player.isSprinting && player.isMoving) {
+          player.stamina = Math.max(0, player.stamina - GAME_CONSTANTS.SPRINT_STAMINA_DRAIN_PER_SECOND * dtSeconds);
+          player.lastSprintTime = now;
+          if (player.stamina <= 0) {
+            player.isSprinting = false;
+          }
+        } else {
+          if (now - player.lastSprintTime >= GAME_CONSTANTS.STAMINA_REGEN_DELAY_MS) {
+            player.stamina = Math.min(player.maxStamina, player.stamina + GAME_CONSTANTS.STAMINA_REGEN_PER_SECOND * dtSeconds);
+          }
+        }
+      } else {
+        player.isSprinting = false;
+        player.stamina = player.maxStamina;
+      }
+
       // 3. Check expiry for spawn shields and reloads
       if (player.isShielded && now >= player.shieldExpiryTime) {
         player.isShielded = false;
       }
 
       if (player.isReloadingInternal && now >= player.reloadExpiryTime) {
-        player.ammo = GAME_CONSTANTS.MAGAZINE_SIZE;
+        const needed = GAME_CONSTANTS.MAGAZINE_SIZE - player.ammo;
+        const transferred = Math.min(needed, player.reserveAmmo);
+        player.ammo += transferred;
+        player.reserveAmmo -= transferred;
         player.isReloading = false;
         player.isReloadingInternal = false;
       }

@@ -915,6 +915,75 @@ body, html, #root {
   box-shadow: 0 0 12px rgba(239, 68, 68, 0.7);
 }
 
+/* Tactical Stamina Track */
+.stamina-track-group {
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.stamina-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+}
+
+.stamina-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #38bdf8;
+}
+
+.stamina-digits {
+  font-size: 1.1rem;
+  font-weight: 900;
+  font-family: var(--font-mono);
+  color: #fff;
+}
+
+.stamina-digits.critical {
+  color: var(--accent-red);
+  animation: flashCritical 0.8s ease-in-out infinite;
+}
+
+.max-stamina {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.stamina-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.stamina-fill {
+  height: 100%;
+  transition: width 0.1s ease-out;
+}
+
+.stamina-fill.healthy {
+  background: linear-gradient(90deg, #0284c7, #38bdf8);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+}
+
+.stamina-fill.warning {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+
+.stamina-fill.critical {
+  background: linear-gradient(90deg, #b91c1c, #ef4444);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+}
+
 /* Ammo Card */
 .hud-ammo-card {
   background: rgba(13, 19, 33, 0.85);
@@ -933,6 +1002,50 @@ body, html, #root {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.35rem;
+}
+
+.ammo-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.fire-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+}
+
+.fire-mode-badge:hover {
+  border-color: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+}
+
+.fire-mode-badge.single {
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+}
+
+.fire-mode-badge.single:hover {
+  border-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+}
+
+.fire-mode-key {
+  font-size: 0.58rem;
+  opacity: 0.75;
 }
 
 .ammo-weapon-name {
@@ -973,6 +1086,13 @@ body, html, #root {
   font-family: var(--font-mono);
 }
 
+.reserve-ammo-count {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+}
+
 .ammo-cartridge-cells {
   display: flex;
   gap: 3px;
@@ -1005,6 +1125,11 @@ body, html, #root {
   padding: 0.25rem 0.65rem;
   border-radius: 4px;
   animation: pulseCritical 0.5s ease-in-out infinite alternate;
+}
+
+.reload-prompt-chip.ammo-empty {
+  background: rgba(239, 68, 68, 0.9);
+  animation: none;
 }
 
 @keyframes pulseCritical {

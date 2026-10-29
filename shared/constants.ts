@@ -8,14 +8,27 @@ export const GAME_CONSTANTS = {
   PLAYER_HEIGHT: 1.8,
   EYE_HEIGHT: 1.65,
 
+  // Movement & Stamina rules
+  MAX_STAMINA: 100,
+  SPRINT_STAMINA_DRAIN_PER_SECOND: 25, // 4 seconds continuous sprint
+  STAMINA_REGEN_PER_SECOND: 20,       // 5 seconds from 0 to 100
+  STAMINA_REGEN_DELAY_MS: 1000,       // 1 second delay before regen starts
+  MIN_STAMINA_TO_SPRINT: 10,          // Must reach 10% before resuming sprint
+
   // Weapon specs
   WEAPON_NAME: 'Pulse Rifle Z-1',
   WEAPON_DAMAGE: 25,
   HEADSHOT_DAMAGE: 45,
-  FIRE_RATE_MS: 140, // ~7.1 shots/sec
+  RIFLE_FIRE_RATE_RPM: 600,  // 600 RPM
+  FIRE_RATE_MS: 100,         // 100ms interval (60,000 / 600)
   MAGAZINE_SIZE: 24,
+  MAX_RESERVE_AMMO: 72,      // 3 reserve magazines
   RELOAD_TIME_MS: 1600,
   MAX_RANGE: 120,
+  FIRE_MODES: {
+    SINGLE: 'SINGLE',
+    AUTO: 'AUTO',
+  },
 
   // Combat rules
   RESPAWN_TIME_MS: 3000,

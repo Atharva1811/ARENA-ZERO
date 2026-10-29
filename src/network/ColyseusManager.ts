@@ -387,6 +387,16 @@ export class ColyseusManager {
     }
   }
 
+  public sendToggleFireMode(mode?: 'SINGLE' | 'AUTO') {
+    if (this.room && this.isConnected) {
+      try {
+        this.room.send('toggle_fire_mode', { mode });
+      } catch (e) {
+        console.warn('[ColyseusManager] Error sending toggle_fire_mode:', e);
+      }
+    }
+  }
+
   public leave() {
     this.currentRoomEpoch++;
     this.manualLeaveRequested = true;
