@@ -21,6 +21,12 @@ export class RemotePlayer {
   private leftLegPivot!: THREE.Group;
   private rightLegPivot!: THREE.Group;
   private shieldMesh!: THREE.Mesh;
+  public hitboxMesh!: THREE.Mesh;
+
+  // Materials for damage flash
+  private armorDarkMat!: THREE.MeshStandardMaterial;
+  private armorTrimMat!: THREE.MeshStandardMaterial;
+  private damageFlashTimer: number = 0;
 
   // Billboard name & health bar
   private billboardSprite!: THREE.Sprite;
@@ -44,6 +50,7 @@ export class RemotePlayer {
 
   // Firing effects and recoil animation
   private muzzleFlashTimer: number = 0;
+  private muzzleFlashFrames: number = 0;
   private armRecoil: number = 0;
   private weaponKickZ: number = 0;
 
@@ -72,18 +79,20 @@ export class RemotePlayer {
 
   private buildMeshes() {
     const primaryColor = new THREE.Color(this.color);
-    const armorDarkMat = new THREE.MeshStandardMaterial({
+    this.armorDarkMat = new THREE.MeshStandardMaterial({
       color: 0x1e293b,
       roughness: 0.5,
       metalness: 0.6,
       flatShading: true,
     });
-    const armorTrimMat = new THREE.MeshStandardMaterial({
+    const armorDarkMat = this.armorDarkMat;
+    this.armorTrimMat = new THREE.MeshStandardMaterial({
       color: primaryColor,
       roughness: 0.3,
       metalness: 0.8,
       flatShading: true,
     });
+    const armorTrimMat = this.armorTrimMat;
     const visorMat = new THREE.MeshBasicMaterial({
       color: primaryColor,
     });
@@ -268,8 +277,11 @@ export class RemotePlayer {
       color: 0xffffff,
       transparent: true,
       opacity: 0,
+      depthTest: false,
+      depthWrite: false,
     });
     this.muzzleFlashCore = new THREE.Mesh(coreGeo, coreMat);
+    this.muzzleFlashCore.renderOrder = 999;
     this.muzzleSocket.add(this.muzzleFlashCore);
 
     // Flash cross starburst plane
@@ -278,9 +290,11 @@ export class RemotePlayer {
       color: 0x38bdf8,
       transparent: true,
       opacity: 0,
+      depthTest: false,
       depthWrite: false,
     });
     this.muzzleFlashCross = new THREE.Mesh(crossGeo, crossMat);
+    this.muzzleFlashCross.renderOrder = 1000;
     this.muzzleSocket.add(this.muzzleFlashCross);
 
     // Dynamic point light for remote muzzle flash
@@ -324,7 +338,16 @@ export class RemotePlayer {
     this.shieldMesh = new THREE.Mesh(shieldGeo, shieldMat);
     this.shieldMesh.position.y = 1.1;
     this.shieldMesh.visible = false;
+    this.shieldMesh.raycast = () => {}; // Never intercept weapon rays
     this.visualRoot.add(this.shieldMesh);
+
+    // 8. Authoritative Hitbox Mesh for Reliable Client-Side Raycasting
+    // Encompasses player full body volume (head to feet)
+    const hitboxGeo = new THREE.CylinderGeometry(0.55, 0.55, 1.85, 8);
+    const hitboxMat = new THREE.MeshBasicMaterial({ visible: false, wireframe: false });
+    this.hitboxMesh = new THREE.Mesh(hitboxGeo, hitboxMat);
+    this.hitboxMesh.position.y = 0.925;
+    this.group.add(this.hitboxMesh);
   }
 
   private buildBillboard() {
@@ -345,6 +368,7 @@ export class RemotePlayer {
     this.billboardSprite = new THREE.Sprite(spriteMat);
     this.billboardSprite.scale.set(2.4, 0.6, 1);
     this.billboardSprite.position.set(0, 2.15, 0);
+    this.billboardSprite.raycast = () => {}; // Prevent billboard / nameplate from intercepting weapon rays
     this.group.add(this.billboardSprite);
 
     this.redrawBillboard();
@@ -408,7 +432,8 @@ export class RemotePlayer {
    * - Kicks the arm and weapon with snappy recoil animation
    */
   public triggerFire(_endX?: number, _endY?: number, _endZ?: number, _hitTarget: boolean = false) {
-    this.muzzleFlashTimer = 0.06;
+    this.muzzleFlashTimer = 0.09;
+    this.muzzleFlashFrames = 3;
     this.armRecoil = 0.22;
     this.weaponKickZ = 0.06;
 
@@ -416,7 +441,23 @@ export class RemotePlayer {
       (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 1.0;
       (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0.95;
       this.muzzleFlashCross.rotation.z = Math.random() * Math.PI;
-      this.muzzleLight.intensity = 4.2;
+      this.muzzleLight.intensity = 5.0;
+    }
+  }
+
+  /**
+   * Triggers visible combat damage hit reaction:
+   * Flashes armor meshes bright red and executes a tactile impact flinch.
+   */
+  public triggerDamageHit() {
+    this.damageFlashTimer = 0.14;
+    if (this.armorDarkMat) {
+      this.armorDarkMat.emissive.setHex(0xef4444);
+      this.armorDarkMat.emissiveIntensity = 0.9;
+    }
+    if (this.armorTrimMat) {
+      this.armorTrimMat.emissive.setHex(0xef4444);
+      this.armorTrimMat.emissiveIntensity = 0.9;
     }
   }
 
@@ -440,6 +481,9 @@ export class RemotePlayer {
 
     let redraw = false;
     if (typeof state.health === 'number' && state.health !== this.health) {
+      if (state.health < this.health) {
+        this.triggerDamageHit();
+      }
       this.health = state.health;
       redraw = true;
     }
@@ -473,8 +517,10 @@ export class RemotePlayer {
     }
     this.group.visible = true;
 
-    // 4. Muzzle flash decay
-    if (this.muzzleFlashTimer > 0) {
+    // 4. Muzzle flash decay: guarantee persistence for at least muzzleFlashFrames frames
+    if (this.muzzleFlashFrames > 0) {
+      this.muzzleFlashFrames--;
+    } else if (this.muzzleFlashTimer > 0) {
       this.muzzleFlashTimer -= dt;
       if (this.muzzleFlashTimer <= 0) {
         if (this.muzzleFlashCore && this.muzzleFlashCross && this.muzzleLight) {
@@ -485,7 +531,26 @@ export class RemotePlayer {
       }
     }
 
-    // 5. Recoil recovery
+    // 5. Combat Damage Flash Decay
+    if (this.damageFlashTimer > 0) {
+      this.damageFlashTimer -= dt;
+      if (this.damageFlashTimer <= 0) {
+        if (this.armorDarkMat) {
+          this.armorDarkMat.emissive.setHex(0x000000);
+          this.armorDarkMat.emissiveIntensity = 0;
+        }
+        if (this.armorTrimMat) {
+          this.armorTrimMat.emissive.setHex(0x000000);
+          this.armorTrimMat.emissiveIntensity = 0;
+        }
+        this.visualRoot.position.y = 0;
+      } else {
+        // Impact flinch jitter
+        this.visualRoot.position.y = 0.04 * Math.sin(this.damageFlashTimer * 50);
+      }
+    }
+
+    // 6. Recoil recovery
     this.armRecoil = Math.max(0, this.armRecoil - dt * 1.8);
     this.weaponKickZ = Math.max(0, this.weaponKickZ - dt * 0.6);
 

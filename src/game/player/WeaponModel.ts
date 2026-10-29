@@ -16,6 +16,7 @@ export class WeaponModel {
   private recoilZ: number = 0;
   private recoilRotX: number = 0;
   private muzzleFlashTimer: number = 0;
+  private muzzleFlashFrames: number = 0;
 
   private isReloading: boolean = false;
   private reloadProgress: number = 0;
@@ -232,8 +233,11 @@ export class WeaponModel {
       color: 0xffffff,
       transparent: true,
       opacity: 0,
+      depthTest: false,
+      depthWrite: false,
     });
     this.muzzleFlashCore = new THREE.Mesh(coreGeo, coreMat);
+    this.muzzleFlashCore.renderOrder = 999;
     this.muzzleFlashGroup.add(this.muzzleFlashCore);
 
     // Cross-star flare mesh
@@ -242,9 +246,11 @@ export class WeaponModel {
       color: 0x38bdf8,
       transparent: true,
       opacity: 0,
+      depthTest: false,
       depthWrite: false,
     });
     this.muzzleFlashCross = new THREE.Mesh(crossGeo, crossMat);
+    this.muzzleFlashCross.renderOrder = 1000;
     this.muzzleFlashGroup.add(this.muzzleFlashCross);
 
     // Dynamic muzzle flash point light
@@ -267,15 +273,16 @@ export class WeaponModel {
    * Triggers snappy tactile recoil and illuminates muzzle flash.
    */
   public triggerRecoil() {
-    this.recoilZ = 0.055;
-    this.recoilRotX = 0.07;
+    this.recoilZ = 0.06;
+    this.recoilRotX = 0.08;
 
-    // Show muzzle flash
-    this.muzzleFlashTimer = 0.06;
+    // Show muzzle flash: guaranteed visible for at least 3 rendered animation frames + 90ms timer
+    this.muzzleFlashTimer = 0.09;
+    this.muzzleFlashFrames = 3;
     (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 1.0;
-    (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0.9;
+    (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0.95;
     this.muzzleFlashCross.rotation.z = Math.random() * Math.PI;
-    this.muzzleLight.intensity = 4.5;
+    this.muzzleLight.intensity = 5.0;
   }
 
   public startReload(durationSec: number = 1.6) {
@@ -287,8 +294,10 @@ export class WeaponModel {
   public update(delta: number, isMoving: boolean, isSprinting: boolean, time: number) {
     const dt = Math.min(delta, 0.1);
 
-    // Muzzle flash decay
-    if (this.muzzleFlashTimer > 0) {
+    // Muzzle flash decay: guarantee at least muzzleFlashFrames frames before timer-based extinction
+    if (this.muzzleFlashFrames > 0) {
+      this.muzzleFlashFrames--;
+    } else if (this.muzzleFlashTimer > 0) {
       this.muzzleFlashTimer -= dt;
       if (this.muzzleFlashTimer <= 0) {
         (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 0;
@@ -297,9 +306,9 @@ export class WeaponModel {
       }
     }
 
-    // Snappy recoil recovery
-    this.recoilZ = Math.max(0, this.recoilZ - dt * 0.42);
-    this.recoilRotX = Math.max(0, this.recoilRotX - dt * 0.65);
+    // Snappy recoil recovery with safe clamp to avoid overshoot during frame drops
+    this.recoilZ = THREE.MathUtils.lerp(this.recoilZ, 0, Math.min(0.4, dt * 10));
+    this.recoilRotX = THREE.MathUtils.lerp(this.recoilRotX, 0, Math.min(0.5, dt * 12));
 
     // Procedural weapon bobbing & breathing sway
     let bobX = 0;

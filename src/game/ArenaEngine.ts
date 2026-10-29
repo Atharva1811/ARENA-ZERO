@@ -63,6 +63,8 @@ export class ArenaEngine {
   private clock = new THREE.Clock();
   private isDisposed: boolean = false;
   private hasInitialServerSpawn: boolean = false;
+  private lastReportedKills: number = 0;
+  private lastReportedScore: number = 0;
   private processedShotIds = new Set<string>();
 
   constructor(container: HTMLElement, colyseus: ColyseusManager, callbacks: EngineCallbacks = {}) {
@@ -168,13 +170,26 @@ export class ArenaEngine {
     // Hit confirmation from server
     this.colyseus.onHitConfirm = (data) => {
       if (this.isDisposed) return;
+      console.log(`[CombatDiag:9/11 TARGET_HIT_EVENT_RECEIVED] (Shooter) shotId=${data.shotId || 'N/A'} targetId=${data.targetId} dmg=${data.damage} headshot=${data.headshot} remainingHP=${data.remainingHealth} isKill=${data.isKill}`);
       this.fpsAudio.playHitMarker(data.headshot);
       this.callbacks.onCrosshairHit?.(data.headshot);
+
+      // Instantly apply hit reaction to the target remote player for responsive feedback
+      const targetRemote = this.remotePlayers.get(data.targetId);
+      if (targetRemote) {
+        targetRemote.triggerDamageHit();
+        targetRemote.health = data.remainingHealth;
+        if (data.isKill) {
+          targetRemote.isAlive = false;
+        }
+        (targetRemote as any).redrawBillboard?.();
+      }
     };
 
     // Damage received from server
     this.colyseus.onDamageReceived = (data) => {
       if (this.isDisposed) return;
+      console.log(`[CombatDiag:9/11 TARGET_HIT_EVENT_RECEIVED] (Victim) shotId=${data.shotId || 'N/A'} attackerId=${data.attackerId} dmg=${data.damage} currentHP=${data.currentHealth}`);
       this.health = Math.max(0, data.currentHealth);
       this.fpsAudio.playDamageGrunt();
       this.callbacks.onHealthChange?.(this.health, this.maxHealth);
@@ -268,6 +283,7 @@ export class ArenaEngine {
     // Respawn confirmation
     this.colyseus.onRespawnConfirmed = (data) => {
       if (this.isDisposed) return;
+      console.log(`[CombatDiag:10/11 TARGET_DEATH_AND_RESPAWN] Respawn confirmed for local player (${this.colyseus.mySessionId}) at (${data.x.toFixed(1)}, ${data.z.toFixed(1)})`);
       this.isAlive = true;
       this.health = this.maxHealth;
       this.ammo = this.maxAmmo;
@@ -335,6 +351,12 @@ export class ArenaEngine {
         if (typeof player.health === 'number' && player.health !== this.health) {
           this.health = player.health;
           this.callbacks.onHealthChange?.(this.health, this.maxHealth);
+        }
+
+        if (typeof player.kills === 'number' && (player.kills !== this.lastReportedKills || player.score !== this.lastReportedScore)) {
+          this.lastReportedKills = player.kills;
+          this.lastReportedScore = player.score;
+          console.log(`[CombatDiag:11/11 SHOOTER_SCORE_UPDATED] Local shooterId=${sessionId} kills=${player.kills} score=${player.score}`);
         }
 
         if (typeof player.isAlive === 'boolean' && player.isAlive !== this.isAlive) {
@@ -421,6 +443,9 @@ export class ArenaEngine {
       return;
     }
 
+    const shotId = `shot_${this.colyseus.mySessionId || 'local'}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    console.log(`[CombatDiag:1/11 LOCAL_FIRE_INPUT] shotId=${shotId} shooterId=${this.colyseus.mySessionId} ammo=${this.ammo} isAlive=${this.isAlive}`);
+
     this.lastFireTime = now;
     this.ammo--;
     this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
@@ -429,10 +454,14 @@ export class ArenaEngine {
     this.fpsAudio.playShoot();
     this.weaponModel.triggerRecoil();
 
+    this.fpsController.camera.updateMatrixWorld(true);
+    const muzzlePos = this.weaponModel.getMuzzleWorldPosition(new THREE.Vector3());
+    console.log(`[CombatDiag:2/11 LOCAL_MUZZLE_EFFECT] shotId=${shotId} muzzleX=${muzzlePos.x.toFixed(2)} muzzleY=${muzzlePos.y.toFixed(2)} muzzleZ=${muzzlePos.z.toFixed(2)}`);
+
     // Calculate forward ray
     const { origin, direction } = this.fpsController.getForwardRay();
 
-    // Check hit against remote players
+    // Check hit against remote players using full body hitbox mesh
     let hitSessionId: string | undefined = undefined;
     let hitDistance: number = GAME_CONSTANTS.MAX_RANGE;
     let hitPoint = origin.clone().addScaledVector(direction, hitDistance);
@@ -444,6 +473,10 @@ export class ArenaEngine {
 
     this.remotePlayers.forEach((remote, sid) => {
       if (remote.isAlive) {
+        if (remote.hitboxMesh) {
+          remoteMeshes.push(remote.hitboxMesh);
+          meshToSessionMap.set(remote.hitboxMesh, sid);
+        }
         remoteMeshes.push(remote.group);
         meshToSessionMap.set(remote.group, sid);
       }
@@ -455,7 +488,7 @@ export class ArenaEngine {
       hitDistance = hit.distance;
       hitPoint = hit.point;
 
-      // Find top group
+      // Find top group or hitbox mapping
       let cur: THREE.Object3D | null = hit.object;
       while (cur && !meshToSessionMap.has(cur)) {
         cur = cur.parent;
@@ -479,8 +512,6 @@ export class ArenaEngine {
 
     // Spawn local tracer line safely from weapon muzzle
     try {
-      this.fpsController.camera.updateMatrixWorld(true);
-      const muzzlePos = this.weaponModel.getMuzzleWorldPosition(new THREE.Vector3());
       const hasValidMuzzle = Number.isFinite(muzzlePos.x) && Number.isFinite(muzzlePos.y) && Number.isFinite(muzzlePos.z);
       const startX = hasValidMuzzle ? muzzlePos.x : origin.x;
       const startY = hasValidMuzzle ? muzzlePos.y : origin.y - 0.1;
@@ -499,8 +530,11 @@ export class ArenaEngine {
       console.warn('[ArenaEngine] Failed to add local tracer:', e);
     }
 
+    console.log(`[CombatDiag:3/11 FIRE_REQUEST_SENT] shotId=${shotId} shooterId=${this.colyseus.mySessionId} origin=(${origin.x.toFixed(2)}, ${origin.y.toFixed(2)}, ${origin.z.toFixed(2)}) dir=(${direction.x.toFixed(2)}, ${direction.y.toFixed(2)}, ${direction.z.toFixed(2)}) targetClaimed=${hitSessionId || 'none'} hitDist=${hitDistance.toFixed(2)}m`);
+
     // Send fire message to server for authoritative validation
     this.colyseus.sendFire({
+      shotId,
       originX: origin.x,
       originY: origin.y,
       originZ: origin.z,

@@ -144,11 +144,21 @@ export function isLineOfSightClear(
   x0: number, y0: number, z0: number,
   x1: number, y1: number, z1: number
 ): boolean {
+  return getLineOfSightObstacle(x0, y0, z0, x1, y1, z1) === null;
+}
+
+/**
+ * Returns the ID of the obstacle blocking the ray, or null if line of sight is clear.
+ */
+export function getLineOfSightObstacle(
+  x0: number, y0: number, z0: number,
+  x1: number, y1: number, z1: number
+): string | null {
   if (
     !Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(z0) ||
     !Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(z1)
   ) {
-    return false;
+    return 'invalid_coordinates';
   }
 
   const dirX = x1 - x0;
@@ -156,7 +166,7 @@ export function isLineOfSightClear(
   const dirZ = z1 - z0;
   const totalDist = Math.hypot(dirX, dirY, dirZ);
 
-  if (totalDist < 0.001) return true;
+  if (totalDist < 0.4) return null; // Target is immediately adjacent
 
   // Normalized 3D direction
   const nx = dirX / totalDist;
@@ -179,11 +189,11 @@ export function isLineOfSightClear(
         const t1 = (-b - sqrtDisc) / a;
         const t2 = (-b + sqrtDisc) / a;
 
-        const hitT = t1 > 0.2 ? t1 : (t2 > 0.2 ? t2 : -1);
-        if (hitT > 0.2 && hitT < totalDist - 0.2) {
+        const hitT = t1 > 0.25 ? t1 : (t2 > 0.25 ? t2 : -1);
+        if (hitT > 0.25 && hitT < totalDist - 0.25) {
           const hitY = y0 + hitT * ny;
           if (hitY >= cyl.minY && hitY <= cyl.maxY) {
-            return false; // Blocked by cylinder
+            return cyl.id; // Blocked by cylinder
           }
         }
       }
@@ -231,13 +241,14 @@ export function isLineOfSightClear(
       continue;
     }
 
-    // If intersection happens between shooter and target
-    if (tmin < totalDist - 0.2 && tmax > 0.2) {
-      return false; // Blocked by wall
+    // Obstacle blocks if the ray enters the box between shooter (with tolerance) and target
+    const tEnter = Math.max(0.25, tmin);
+    if (tEnter < totalDist - 0.25 && tmax > tEnter) {
+      return box.id; // Blocked by box
     }
   }
 
-  return true; // Clean line of sight
+  return null; // Clean line of sight
 }
 
 export interface ObstacleHitResult {

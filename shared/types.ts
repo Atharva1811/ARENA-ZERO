@@ -16,6 +16,7 @@ export interface PlayerInputPayload {
 }
 
 export interface FireWeaponPayload {
+  shotId?: string;
   originX: number;
   originY: number;
   originZ: number;
@@ -26,6 +27,7 @@ export interface FireWeaponPayload {
 }
 
 export interface HitConfirmPayload {
+  shotId?: string;
   targetId: string;
   damage: number;
   isKill: boolean;
@@ -34,6 +36,7 @@ export interface HitConfirmPayload {
 }
 
 export interface DamageReceivedPayload {
+  shotId?: string;
   attackerId: string;
   damage: number;
   currentHealth: number;
