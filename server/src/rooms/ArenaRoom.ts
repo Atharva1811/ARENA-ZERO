@@ -353,7 +353,18 @@ export class ArenaRoom extends Room<ArenaState> {
     const maxAllowedDist = GAME_CONSTANTS.MAX_CLIENT_SPEED_TOLERANCE * Math.max(0.016, dt) + 0.5;
     const movedDist = Math.hypot(resolved.x - player.x, resolved.z - player.z);
 
-    if (isFirstMove || movedDist <= maxAllowedDist) {
+    if (isFirstMove) {
+      // First client move packet: ensure it is close to authoritative spawn position (tolerance 3.5m)
+      const distFromSpawn = Math.hypot(resolved.x - player.spawnX, resolved.z - player.spawnZ);
+      if (distFromSpawn <= 3.5) {
+        player.x = resolved.x;
+        player.z = resolved.z;
+      } else {
+        // Discard uninitialized/stale client coordinates and enforce server authoritative spawn!
+        player.x = player.spawnX;
+        player.z = player.spawnZ;
+      }
+    } else if (movedDist <= maxAllowedDist) {
       player.x = resolved.x;
       player.z = resolved.z;
     } else {
@@ -435,11 +446,22 @@ export class ArenaRoom extends Room<ArenaState> {
       return;
     }
 
-    // 6. Origin proximity check (prevent spoofing ray origins far from shooter)
+    // 6. Authoritative shot origin calculation & reconciliation (Rule 5)
+    const serverEyeY = shooter.y + GAME_CONSTANTS.EYE_HEIGHT;
+    let authoritativeOriginX = shooter.x;
+    let authoritativeOriginY = serverEyeY;
+    let authoritativeOriginZ = shooter.z;
+
     const originDistSq = (data.originX - shooter.x) ** 2 + (data.originZ - shooter.z) ** 2;
-    if (originDistSq > 16.0) {
-      console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} shooterId=${client.sessionId} validation=REJECTED reason=Origin too far from shooter`);
-      return;
+    // If client origin is reasonably close (within 3.5m due to movement prediction/interpolation),
+    // use client origin for smooth viewmodel alignment; otherwise fallback to authoritative server origin.
+    // NEVER reject a valid shot just because of latency-induced position discrepancy.
+    if (originDistSq <= 12.25) {
+      authoritativeOriginX = data.originX;
+      authoritativeOriginY = Number.isFinite(data.originY) ? data.originY : serverEyeY;
+      authoritativeOriginZ = data.originZ;
+    } else {
+      console.log(`[CombatDiag:5/11 SERVER_SHOT_VALIDATED] shotId=${shotId} origin reconciled to authoritative server position (offset=${Math.sqrt(originDistSq).toFixed(2)}m)`);
     }
 
     // All validations passed: perform state changes
@@ -452,9 +474,9 @@ export class ArenaRoom extends Room<ArenaState> {
 
     const maxRange = GAME_CONSTANTS.MAX_RANGE;
     let hitSomething = false;
-    let hitX = data.originX + nx * maxRange;
-    let hitY = data.originY + ny * maxRange;
-    let hitZ = data.originZ + nz * maxRange;
+    let hitX = authoritativeOriginX + nx * maxRange;
+    let hitY = authoritativeOriginY + ny * maxRange;
+    let hitZ = authoritativeOriginZ + nz * maxRange;
 
     // 7. Server-authoritative Hitscan Combat Resolution
     let hitTargetSessionId: string | null = null;
@@ -480,9 +502,9 @@ export class ArenaRoom extends Room<ArenaState> {
         const targetRadius = isClientClaimedTarget ? 0.95 : 0.85;
 
         const hitResult = intersectRayCylinder(
-          data.originX,
-          data.originY,
-          data.originZ,
+          authoritativeOriginX,
+          authoritativeOriginY,
+          authoritativeOriginZ,
           nx,
           ny,
           nz,
@@ -496,9 +518,9 @@ export class ArenaRoom extends Room<ArenaState> {
         if (hitResult.hit && hitResult.dist >= 0.1 && hitResult.dist < bestTargetDist) {
           // Check if ray is occluded by static arena obstacles
           const blockedBy = getLineOfSightObstacle(
-            data.originX,
-            data.originY,
-            data.originZ,
+            authoritativeOriginX,
+            authoritativeOriginY,
+            authoritativeOriginZ,
             hitResult.hitX,
             hitResult.hitY,
             hitResult.hitZ
@@ -525,9 +547,9 @@ export class ArenaRoom extends Room<ArenaState> {
     if (!hitSomething) {
       try {
         const obsHit = raycastArenaObstacles(
-          data.originX,
-          data.originY,
-          data.originZ,
+          authoritativeOriginX,
+          authoritativeOriginY,
+          authoritativeOriginZ,
           nx,
           ny,
           nz,
@@ -550,12 +572,12 @@ export class ArenaRoom extends Room<ArenaState> {
       const tracerEvent: WeaponTracerEvent = {
         shotId,
         shooterId: client.sessionId,
-        startX: Number.isFinite(data.originX) ? data.originX : shooter.x,
-        startY: Number.isFinite(data.originY) ? data.originY : shooter.y + GAME_CONSTANTS.EYE_HEIGHT,
-        startZ: Number.isFinite(data.originZ) ? data.originZ : shooter.z,
-        endX: Number.isFinite(hitX) ? hitX : data.originX,
-        endY: Number.isFinite(hitY) ? hitY : data.originY,
-        endZ: Number.isFinite(hitZ) ? hitZ : data.originZ,
+        startX: authoritativeOriginX,
+        startY: authoritativeOriginY,
+        startZ: authoritativeOriginZ,
+        endX: Number.isFinite(hitX) ? hitX : authoritativeOriginX,
+        endY: Number.isFinite(hitY) ? hitY : authoritativeOriginY,
+        endZ: Number.isFinite(hitZ) ? hitZ : authoritativeOriginZ,
         hitTarget: hitSomething,
         targetId: hitTargetSessionId || null,
         timestamp: now,

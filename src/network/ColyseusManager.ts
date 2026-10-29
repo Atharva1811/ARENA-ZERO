@@ -41,7 +41,17 @@ export class ColyseusManager {
   public onDamageReceived?: (data: DamageReceivedPayload) => void;
   public onKillFeed?: (data: KillFeedItem) => void;
   public onWeaponTracer?: (data: WeaponTracerEvent) => void;
-  public onInitSpawn?: (data: SpawnConfirmedPayload) => void;
+  public cachedInitSpawn?: SpawnConfirmedPayload;
+  private _onInitSpawn?: (data: SpawnConfirmedPayload) => void;
+  public get onInitSpawn(): ((data: SpawnConfirmedPayload) => void) | undefined {
+    return this._onInitSpawn;
+  }
+  public set onInitSpawn(cb: ((data: SpawnConfirmedPayload) => void) | undefined) {
+    this._onInitSpawn = cb;
+    if (cb && this.cachedInitSpawn) {
+      cb(this.cachedInitSpawn);
+    }
+  }
   public onRespawnConfirmed?: (data: { x: number; y: number; z: number; yaw: number }) => void;
   public onMatchOver?: (data: MatchWinnerPayload) => void;
   public onAnnouncement?: (data: { message: string }) => void;
@@ -148,6 +158,7 @@ export class ColyseusManager {
       this.manualLeaveRequested = false;
       this.reconnectAttempts = 0;
       this.isReconnecting = false;
+      this.cachedInitSpawn = undefined;
 
       const room = await connectFn();
       this.room = room;
@@ -221,6 +232,7 @@ export class ColyseusManager {
 
     room.onMessage('init_spawn', (data: SpawnConfirmedPayload) => {
       if (this.currentRoomEpoch !== myEpoch || this.room !== room) return;
+      this.cachedInitSpawn = data;
       this.onInitSpawn?.(data);
     });
 
@@ -359,5 +371,6 @@ export class ColyseusManager {
     this.lastRoomId = '';
     this.reconnectionToken = '';
     this.isConnected = false;
+    this.cachedInitSpawn = undefined;
   }
 }

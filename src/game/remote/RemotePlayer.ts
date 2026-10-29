@@ -297,6 +297,9 @@ export class RemotePlayer {
     this.muzzleFlashCross.renderOrder = 1000;
     this.muzzleSocket.add(this.muzzleFlashCross);
 
+    this.muzzleFlashCore.visible = false;
+    this.muzzleFlashCross.visible = false;
+
     // Dynamic point light for remote muzzle flash
     this.muzzleLight = new THREE.PointLight(0x00e5ff, 0, 7);
     this.muzzleSocket.add(this.muzzleLight);
@@ -438,6 +441,8 @@ export class RemotePlayer {
     this.weaponKickZ = 0.06;
 
     if (this.muzzleFlashCore && this.muzzleFlashCross && this.muzzleLight) {
+      this.muzzleFlashCore.visible = true;
+      this.muzzleFlashCross.visible = true;
       (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 1.0;
       (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0.95;
       this.muzzleFlashCross.rotation.z = Math.random() * Math.PI;
@@ -524,10 +529,17 @@ export class RemotePlayer {
       this.muzzleFlashTimer -= dt;
       if (this.muzzleFlashTimer <= 0) {
         if (this.muzzleFlashCore && this.muzzleFlashCross && this.muzzleLight) {
+          this.muzzleFlashCore.visible = false;
+          this.muzzleFlashCross.visible = false;
           (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 0;
           (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0;
           this.muzzleLight.intensity = 0;
         }
+      }
+    } else {
+      if (this.muzzleFlashCore && this.muzzleFlashCross) {
+        this.muzzleFlashCore.visible = false;
+        this.muzzleFlashCross.visible = false;
       }
     }
 

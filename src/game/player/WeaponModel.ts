@@ -252,6 +252,7 @@ export class WeaponModel {
     this.muzzleFlashCross = new THREE.Mesh(crossGeo, crossMat);
     this.muzzleFlashCross.renderOrder = 1000;
     this.muzzleFlashGroup.add(this.muzzleFlashCross);
+    this.muzzleFlashGroup.visible = false;
 
     // Dynamic muzzle flash point light
     this.muzzleLight = new THREE.PointLight(0x00e5ff, 0, 8);
@@ -279,6 +280,7 @@ export class WeaponModel {
     // Show muzzle flash: guaranteed visible for at least 3 rendered animation frames + 90ms timer
     this.muzzleFlashTimer = 0.09;
     this.muzzleFlashFrames = 3;
+    this.muzzleFlashGroup.visible = true;
     (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 1.0;
     (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0.95;
     this.muzzleFlashCross.rotation.z = Math.random() * Math.PI;
@@ -300,10 +302,13 @@ export class WeaponModel {
     } else if (this.muzzleFlashTimer > 0) {
       this.muzzleFlashTimer -= dt;
       if (this.muzzleFlashTimer <= 0) {
+        this.muzzleFlashGroup.visible = false;
         (this.muzzleFlashCore.material as THREE.MeshBasicMaterial).opacity = 0;
         (this.muzzleFlashCross.material as THREE.MeshBasicMaterial).opacity = 0;
         this.muzzleLight.intensity = 0;
       }
+    } else {
+      this.muzzleFlashGroup.visible = false;
     }
 
     // Snappy recoil recovery with safe clamp to avoid overshoot during frame drops

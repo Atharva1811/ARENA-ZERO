@@ -7,6 +7,7 @@ import { EffectManager } from './effects/EffectManager';
 import { RemotePlayer } from './remote/RemotePlayer';
 import { ColyseusManager } from '../network/ColyseusManager';
 import { GAME_CONSTANTS } from '../../shared/constants';
+import { raycastArenaObstacles } from '../../shared/arenaCollision';
 import type { KillFeedItem, MatchWinnerPayload } from '../../shared/types';
 
 export interface PlayerScoreEntry {
@@ -449,6 +450,9 @@ export class ArenaEngine {
     this.lastFireTime = now;
     this.ammo--;
     this.callbacks.onAmmoChange?.(this.ammo, this.maxAmmo);
+    if (this.ammo === 0) {
+      this.reloadWeapon();
+    }
 
     // Audio and weapon viewmodel recoil
     this.fpsAudio.playShoot();
@@ -496,6 +500,22 @@ export class ArenaEngine {
       if (cur) {
         hitSessionId = meshToSessionMap.get(cur);
       }
+    }
+
+    // Test ray against static arena obstacles (walls, pillars, bunkers)
+    const obsHit = raycastArenaObstacles(
+      origin.x,
+      origin.y,
+      origin.z,
+      direction.x,
+      direction.y,
+      direction.z,
+      hitDistance
+    );
+    if (obsHit.hit && obsHit.dist < hitDistance) {
+      hitDistance = obsHit.dist;
+      hitPoint.set(obsHit.hitX, obsHit.hitY, obsHit.hitZ);
+      hitSessionId = undefined; // Occluded by static obstacle
     }
 
     // Validate forward ray coordinates

@@ -5,9 +5,10 @@ import { ColyseusManager } from '../../network/ColyseusManager';
 
 export class FPSController {
   public camera: THREE.PerspectiveCamera;
-  public position = new THREE.Vector3(0, 0, 18);
+  public position = new THREE.Vector3(0, 0, 22);
   public yaw: number = 0;
   public pitch: number = 0;
+  public hasReceivedSpawn: boolean = false;
 
   public isMoving: boolean = false;
   public isSprinting: boolean = false;
@@ -162,6 +163,7 @@ export class FPSController {
   }
 
   public teleport(x: number, y: number, z: number, yaw?: number) {
+    this.hasReceivedSpawn = true;
     this.position.set(x, y, z);
     if (yaw !== undefined) {
       this.yaw = yaw;
@@ -173,7 +175,7 @@ export class FPSController {
   public update(delta: number, isGameActive: boolean) {
     const dt = Math.min(delta, 0.08);
 
-    if (isGameActive) {
+    if (isGameActive && this.hasReceivedSpawn) {
       // 1. Calculate camera-relative forward and right vectors
       const camForwardX = -Math.sin(this.yaw);
       const camForwardZ = -Math.cos(this.yaw);
